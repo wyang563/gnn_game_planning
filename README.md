@@ -1,0 +1,1 @@
+MEng Project on using GNNs to select agents in a scene that an ego-agent should use to calculate a game theory optimal movement option.
