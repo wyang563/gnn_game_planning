@@ -1,3 +1,7 @@
+# dataset and training logs
 src/data/vci-dataset-citr
 logs
-src/gnn_game_planning.egg-info
+
+# cache files
+*.egg-info
+*__pycache__*
