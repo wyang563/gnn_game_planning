@@ -1,6 +1,7 @@
 # dataset and training logs
 src/data/vci-dataset-citr
 logs
+example_files
 
 # cache files
 *.egg-info
