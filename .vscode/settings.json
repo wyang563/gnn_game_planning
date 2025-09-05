@@ -1,0 +1,11 @@
+{
+    "python.defaultInterpreterPath": "/home/alex/miniconda3/envs/gnn_game_planning/bin/python",
+    "python.pythonPath": "/home/alex/miniconda3/envs/gnn_game_planning/bin/python",
+    "python.condaPath": "/home/alex/miniconda3/bin/conda",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.languageServer": "Pylance",
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.diagnosticMode": "workspace"
+}
