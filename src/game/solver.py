@@ -2,14 +2,14 @@ import numpy as np
 import torch
 
 class NashSolver:
-    def __init__(self):
+    def __init__(self, Q_goal, Q_prox, R, safety_radius):
         self.setup_julia()
         
         # Game parameters from PSN Game paper Section 3 and Appendix
-        self.Q_goal = 5.0      # Goal-reaching weight
-        self.Q_prox = 10.0     # Proximity cost weight  
-        self.R = 0.1           # Control cost weight
-        self.safety_radius = 0.3  # Safety radius between agents
+        self.Q_goal = Q_goal      # Goal-reaching weight
+        self.Q_prox = Q_prox     # Proximity cost weight  
+        self.R = R           # Control cost weight
+        self.safety_radius = safety_radius # Safety radius between agents
         
     def setup_julia(self):
         try:
@@ -300,7 +300,7 @@ class NashSolver:
         
         self.julia.eval(julia_code)
     
-    def solve_nash_eq(self, positions, velocities, targets, trajectories, dt):
+    def solve_nash_eq(self, positions, velocities, targets, dt=0.1):
         """
         Solve Nash equilibrium for linear-quadratic multi-agent game.
         
@@ -308,7 +308,6 @@ class NashSolver:
             positions (torch.Tensor): Current positions of all agents [n_agents, 2]
             velocities (torch.Tensor): Current velocities of all agents [n_agents, 2]  
             targets (torch.Tensor): Target positions for all agents [n_agents, 2]
-            trajectories (list): Historical trajectory data (optional)
             dt (float): Time step
             
         Returns:

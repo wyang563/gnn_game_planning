@@ -2,7 +2,7 @@ import torch
 from .solver import NashSolver
 
 class Simulator:
-    def __init__(self, num_agents, region_size, debug=False):
+    def __init__(self, num_agents, region_size, solver_params, debug=False):
         self.num_agents = num_agents
         self.region_size = region_size
         self.dt = 0.1  
@@ -21,7 +21,7 @@ class Simulator:
             
         self.initial_speed = 0.5
         self._set_initial_velocities()
-        self.solver = NashSolver()
+        self.solver = NashSolver(Q_goal=solver_params['Q_goal'], Q_prox=solver_params['Q_prox'], R=solver_params['R'], safety_radius=solver_params['safety_radius'])
         self.trajectory_history = [[] for _ in range(num_agents)]
         self._update_trajectory_history()
     
@@ -39,11 +39,7 @@ class Simulator:
                 'timestamp': len(self.trajectory_history[i]) * self.dt
             })
     
-    def call(self, trajectories=None):
-        if trajectories is None:
-            # Use internal trajectory history
-            trajectories = self.trajectory_history
-        
+    def call(self):
         try:
             # Call NashSolver to get optimal controls
             # Note: solve_nash_eq method needs to be implemented in NashSolver
@@ -51,7 +47,6 @@ class Simulator:
                 positions=self.positions,
                 velocities=self.velocities, 
                 targets=self.targets,
-                trajectories=trajectories,
                 dt=self.dt
             )
             

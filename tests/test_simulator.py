@@ -48,7 +48,7 @@ def test_simulator_basic(sim, num_steps=50):
     # Run simulation for a few steps
     trajectory_data = []
     
-    for step in range(num_steps):
+    for _ in range(num_steps):
         # Get current states
         states = sim.get_states()
         trajectory_data.append(states)
@@ -59,10 +59,10 @@ def test_simulator_basic(sim, num_steps=50):
         # Step the simulation
         sim.step(controls)
         
-        if step % 5 == 0:
-            print(f"Step {step}: Time = {states['time']:.2f}s")
-            print(f"  Agent 0 position: [{states['positions'][0,0]:.2f}, {states['positions'][0,1]:.2f}]")
-            print(f"  Agent 0 velocity: [{states['velocities'][0,0]:.2f}, {states['velocities'][0,1]:.2f}]")
+        # if step % 5 == 0:
+        #     print(f"Step {step}: Time = {states['time']:.2f}s")
+        #     print(f"  Agent 0 position: [{states['positions'][0,0]:.2f}, {states['positions'][0,1]:.2f}]")
+        #     print(f"  Agent 0 velocity: [{states['velocities'][0,0]:.2f}, {states['velocities'][0,1]:.2f}]")
     
     return trajectory_data
 
@@ -77,11 +77,14 @@ def visualize_trajectories(trajectory_data, sim):
         
         # Mark start and end
         ax1.plot(float(positions[0, 0]), float(positions[0, 1]), 'go', markersize=8)  # Start
+        ax1.text(float(positions[0, 0]) + 0.05, float(positions[0, 1]) + 0.05, f"{agent_id}", color='g', fontsize=9, ha='left', va='bottom')
         ax1.plot(float(positions[-1, 0]), float(positions[-1, 1]), 'ro', markersize=8)  # End
+        ax1.text(float(positions[-1, 0]) + 0.05, float(positions[-1, 1]) + 0.05, f"{agent_id}", color='r', fontsize=9, ha='left', va='bottom')
         
         # Mark target
         target = sim.targets[agent_id]
         ax1.plot(float(target[0]), float(target[1]), 'k*', markersize=12, alpha=0.5)
+        ax1.text(float(target[0]) + 0.05, float(target[1]) + 0.05, f"{agent_id}", color='k', fontsize=9, ha='left', va='bottom')
     
     ax1.set_xlim(0, sim.region_size)
     ax1.set_ylim(0, sim.region_size)
@@ -120,7 +123,13 @@ if __name__ == "__main__":
         print("=" * 50)
         
         # Create and test simulator
-        sim = Simulator(num_agents=5, region_size=10.0)
+        solver_params = {
+            'Q_goal': 5.0,
+            'Q_prox': 10.0,
+            'R': 0.1,
+            'safety_radius': 0.3
+        }
+        sim = Simulator(num_agents=5, region_size=10.0, solver_params=solver_params)
         trajectory_data = test_simulator_basic(sim, num_steps=100)
         # Save trajectories as JSON in tests/outputs
         save_trajectories_json(trajectory_data, sim, os.path.join(os.path.dirname(__file__), 'outputs'))
