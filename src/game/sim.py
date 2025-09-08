@@ -101,7 +101,7 @@ class Simulator:
         
         self.positions += self.velocities * self.dt + 0.5 * controls * (self.dt ** 2)
         self.velocities += controls * self.dt
-        self.positions = torch.clamp(self.positions, 0.0, float(self.region_size))
+        # self.positions = torch.clamp(self.positions, 0.0, float(self.region_size))
         
         max_velocity = 3.0  
         for i in range(self.num_agents):

@@ -36,7 +36,7 @@ def save_trajectories_json(trajectory_data, sim, out_dir):
         json.dump(serializable, f)
     print(f"Saved trajectories to '{out_path}'")
 
-def test_simulator_basic(sim):
+def test_simulator_basic(sim, num_steps=50):
     """Test basic simulator functionality."""
     print("Testing Simulator class...")
     print(f"Initial states:")
@@ -46,7 +46,6 @@ def test_simulator_basic(sim):
     print(f"Targets shape: {tuple(states['targets'].shape)}")
     
     # Run simulation for a few steps
-    num_steps = 50
     trajectory_data = []
     
     for step in range(num_steps):
@@ -121,8 +120,8 @@ if __name__ == "__main__":
         print("=" * 50)
         
         # Create and test simulator
-        sim = Simulator(num_agents=3, region_size=10.0)
-        trajectory_data = test_simulator_basic(sim)
+        sim = Simulator(num_agents=5, region_size=10.0)
+        trajectory_data = test_simulator_basic(sim, num_steps=100)
         # Save trajectories as JSON in tests/outputs
         save_trajectories_json(trajectory_data, sim, os.path.join(os.path.dirname(__file__), 'outputs'))
         
