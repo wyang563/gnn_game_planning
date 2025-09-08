@@ -6,3 +6,15 @@ example_files
 # cache files
 *.egg-info
 *__pycache__*
+
+# images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.webp
+*.svg
+*.ico
+*.pdf
