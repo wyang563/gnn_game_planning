@@ -13,13 +13,32 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from game.sim import Simulator
 
-def test_simulator_basic():
+def _tensor_to_list(t):
+    if isinstance(t, (int, float)):
+        return t
+    if hasattr(t, 'detach'):
+        return t.detach().cpu().tolist()
+    return t
+
+def save_trajectories_json(trajectory_data, sim, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    serializable = []
+    for entry in trajectory_data:
+        serializable.append({
+            'positions': _tensor_to_list(entry['positions']),
+            'velocities': _tensor_to_list(entry['velocities']),
+            'targets': _tensor_to_list(entry['targets']),
+            'time': float(entry['time']),
+        })
+    out_path = os.path.join(out_dir, 'simulator_trajectories.json')
+    import json
+    with open(out_path, 'w') as f:
+        json.dump(serializable, f)
+    print(f"Saved trajectories to '{out_path}'")
+
+def test_simulator_basic(sim):
     """Test basic simulator functionality."""
     print("Testing Simulator class...")
-    
-    # Create simulator with 5 agents in a 10x10 region
-    sim = Simulator(num_agents=5, region_size=10.0)
-    
     print(f"Initial states:")
     states = sim.get_states()
     print(f"Positions shape: {tuple(states['positions'].shape)}")
@@ -27,7 +46,7 @@ def test_simulator_basic():
     print(f"Targets shape: {tuple(states['targets'].shape)}")
     
     # Run simulation for a few steps
-    num_steps = 20
+    num_steps = 50
     trajectory_data = []
     
     for step in range(num_steps):
@@ -87,8 +106,11 @@ def visualize_trajectories(trajectory_data, sim):
     ax2.legend()
     
     plt.tight_layout()
-    plt.savefig('/home/alex/gnn_game_planning/simulator_test.png', dpi=150, bbox_inches='tight')
-    print("Visualization saved as 'simulator_test.png'")
+    out_dir = os.path.join(os.path.dirname(__file__), 'outputs')
+    os.makedirs(out_dir, exist_ok=True)
+    img_path = os.path.join(out_dir, 'simulator_test.png')
+    plt.savefig(img_path, dpi=150, bbox_inches='tight')
+    print(f"Visualization saved as '{img_path}'")
     plt.show()
 
 if __name__ == "__main__":
@@ -100,7 +122,9 @@ if __name__ == "__main__":
         
         # Create and test simulator
         sim = Simulator(num_agents=3, region_size=10.0)
-        trajectory_data = test_simulator_basic()
+        trajectory_data = test_simulator_basic(sim)
+        # Save trajectories as JSON in tests/outputs
+        save_trajectories_json(trajectory_data, sim, os.path.join(os.path.dirname(__file__), 'outputs'))
         
         print("\n" + "=" * 50)
         print("Test completed successfully!")

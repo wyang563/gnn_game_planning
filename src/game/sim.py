@@ -2,7 +2,7 @@ import torch
 from .solver import NashSolver
 
 class Simulator:
-    def __init__(self, num_agents, region_size):
+    def __init__(self, num_agents, region_size, debug=False):
         self.num_agents = num_agents
         self.region_size = region_size
         self.dt = 0.1  
@@ -12,6 +12,13 @@ class Simulator:
         
         self.targets = torch.rand((num_agents, 2)) * float(region_size)
         
+        # initial positions
+        if debug:
+            print("targets")
+            print(self.targets)
+            print("initial positions")
+            print(self.positions)
+            
         self.initial_speed = 0.5
         self._set_initial_velocities()
         self.solver = NashSolver()
@@ -69,25 +76,19 @@ class Simulator:
             return self._fallback_control()
     
     def _fallback_control(self):
-        """
-        Fallback control strategy when Nash solver fails.
-        Uses simple proportional control towards targets.
-        """
         controls = torch.zeros((self.num_agents, 2))
         
         for i in range(self.num_agents):
-            # Proportional control towards target
             position_error = self.targets[i] - self.positions[i]
-            velocity_error = -self.velocities[i]  # Damping term
+            velocity_error = -self.velocities[i]  
             
-            # Simple PD control
             kp = 1.0  # Position gain
             kd = 0.5  # Velocity gain
             
             controls[i] = kp * position_error + kd * velocity_error
             
             # Limit acceleration magnitude (typical constraint)
-            max_accel = 2.0  # m/s^2
+            max_accel = 2.0  
             norm_val = torch.norm(controls[i])
             if float(norm_val) > max_accel:
                 controls[i] = controls[i] / norm_val * max_accel
@@ -108,7 +109,6 @@ class Simulator:
         if tuple(controls.shape) != (self.num_agents, 2):
             raise ValueError(f"Controls shape {controls.shape} doesn't match expected {(self.num_agents, 2)}")
         
-        # Double integrator dynamics from the paper
         # Position update: x_{k+1} = x_k + v_k * dt + 0.5 * u_k * dt^2
         self.positions += self.velocities * self.dt + 0.5 * controls * (self.dt ** 2)
         
