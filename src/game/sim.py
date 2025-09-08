@@ -40,16 +40,6 @@ class Simulator:
             })
     
     def call(self, trajectories=None):
-        """
-        Compute Nash equilibrium controls for all agents.
-        
-        Args:
-            trajectories: Optional trajectory data. If None, uses internal trajectory history.
-                         Expected format: list of trajectory data for each agent
-        
-        Returns:
-            torch.Tensor: Control inputs for each agent, shape (num_agents, 2) for [ax, ay]
-        """
         if trajectories is None:
             # Use internal trajectory history
             trajectories = self.trajectory_history
@@ -109,23 +99,15 @@ class Simulator:
         if tuple(controls.shape) != (self.num_agents, 2):
             raise ValueError(f"Controls shape {controls.shape} doesn't match expected {(self.num_agents, 2)}")
         
-        # Position update: x_{k+1} = x_k + v_k * dt + 0.5 * u_k * dt^2
         self.positions += self.velocities * self.dt + 0.5 * controls * (self.dt ** 2)
-        
-        # Velocity update: v_{k+1} = v_k + u_k * dt
         self.velocities += controls * self.dt
-        
-        # Apply boundary conditions (agents stay within region)
         self.positions = torch.clamp(self.positions, 0.0, float(self.region_size))
         
-        # Limit maximum velocity (reasonable constraint)
-        max_velocity = 3.0  # m/s
+        max_velocity = 3.0  
         for i in range(self.num_agents):
             vel_norm = torch.norm(self.velocities[i])
             if float(vel_norm) > max_velocity:
                 self.velocities[i] = self.velocities[i] / vel_norm * max_velocity
-        
-        # Update trajectory history
         self._update_trajectory_history()
     
     def get_states(self):
@@ -144,14 +126,11 @@ class Simulator:
     
     def reset(self):
         """Reset simulation to initial random state."""
-        # Reset positions and targets
         self.positions = torch.rand((self.num_agents, 2)) * float(self.region_size)
         self.targets = torch.rand((self.num_agents, 2)) * float(self.region_size)
         
-        # Reset velocities
         self.velocities = torch.zeros((self.num_agents, 2))
         self._set_initial_velocities()
         
-        # Clear trajectory history
         self.trajectory_history = [[] for _ in range(self.num_agents)]
         self._update_trajectory_history()
