@@ -72,5 +72,21 @@
         "reportUnnecessaryContains": "none",
         "reportUnnecessaryIsInstance": "none",
         "reportUnnecessaryCast": "none"
+    },
+    "julia.executablePath": "/home/alex/.juliaup/bin/julia",
+    "julia.enableTelemetry": false,
+    "julia.enableCrashReporter": false,
+    "julia.symbolCacheDownload": true,
+    "julia.lint.run": true,
+    "julia.lint.missingrefs": "all",
+    "julia.completionmode": "qualify",
+    "files.associations": {
+        "*.jl": "julia"
+    },
+    "[julia]": {
+        "editor.detectIndentation": false,
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4,
+        "editor.wordWrap": "off"
     }
 }

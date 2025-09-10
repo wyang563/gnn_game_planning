@@ -127,7 +127,8 @@ if __name__ == "__main__":
             'Q_goal': 5.0,
             'Q_prox': 10.0,
             'R': 0.1,
-            'safety_radius': 0.3
+            'safety_radius': 0.3,
+            'horizon': 5
         }
         sim = Simulator(num_agents=5, region_size=10.0, solver_params=solver_params)
         trajectory_data = test_simulator_basic(sim, num_steps=100)

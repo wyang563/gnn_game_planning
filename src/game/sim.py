@@ -5,6 +5,7 @@ class Simulator:
     def __init__(self, num_agents, region_size, solver_params, debug=False):
         self.num_agents = num_agents
         self.region_size = region_size
+        self.horizon = solver_params['horizon']
         self.dt = 0.1  
         
         self.positions = torch.rand((num_agents, 2)) * float(region_size)  # [x, y] for each agent
@@ -47,6 +48,7 @@ class Simulator:
                 positions=self.positions,
                 velocities=self.velocities, 
                 targets=self.targets,
+                horizon=self.horizon,
                 dt=self.dt
             )
             
