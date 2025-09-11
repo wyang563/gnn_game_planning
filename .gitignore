@@ -2,7 +2,7 @@
 src/data/vci-dataset-citr
 logs
 example_files
-tests/outputs
+*outputs*
 
 # cache files
 *.egg-info

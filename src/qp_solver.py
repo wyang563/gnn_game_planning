@@ -18,12 +18,12 @@ class QPNashSolver:
     
     def __init__(self, 
                  n_agents: int = 2, 
-                 horizon: int = 20,
+                 horizon: int = 50,
                  dt: float = 0.1,
-                 w1: float = 10.0,  # goal tracking weight (default from reference)
-                 w2: float = 0.1,  # velocity penalty weight (default from reference)
+                 w1: float = 1.0,  # goal tracking weight (default from reference)
+                 w2: float = 1.0,  # velocity penalty weight (default from reference)
                  w3: float = 0.1,  # control effort weight (default from reference)
-                 w4: float = 0.0,  # collision avoidance weight (default from reference)
+                 w4: float = 1.0,  # collision avoidance weight (default from reference)
                  eps: float = 1e-4):
         """
         Initialize QP Nash solver.
@@ -63,8 +63,8 @@ class QPNashSolver:
         
         # Default bounds (can be overridden)
         self.pos_bounds = (-10.0, 10.0)
-        self.vel_bounds = (-2.0, 2.0) 
-        self.accel_bounds = (-0.5, 0.5)
+        self.vel_bounds = (-5.0, 5.0) 
+        self.accel_bounds = (-2.0, 2.0)
         
     def _build_dynamics_constraints(self, initial_states: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -242,22 +242,20 @@ class QPNashSolver:
                     # Set Q = 2*w3*I
                     Q[ctrl_idx, ctrl_idx] += 2.0 * self.w3
         
-        # Add collision avoidance terms (coupling between agents)
-        # Use distance-based quadratic penalty: w4 * ||p_i - p_j||^2
+        # Add collision terms (coupling between agents)
         for k in range(self.horizon + 1):
             for i in range(self.n_agents):
                 for j in range(i + 1, self.n_agents):
                     i_offset = i * self.n_vars_per_agent + k * self.state_dim
                     j_offset = j * self.n_vars_per_agent + k * self.state_dim
                     
-                    # Quadratic penalty for distance: (p_i - p_j)^T * (p_i - p_j)
-                    # = p_i^T*p_i + p_j^T*p_j - 2*p_i^T*p_j
+                    # Quadratic term for distance: (p_i - p_j)^T (p_i - p_j)
+                    # Repulsive cost uses negative sign on this quantity.
                     for dim in range(2):  # Only position dimensions
-                        # p_i^T*p_i term: set 2*w4 to match 0.5*z^TQz form
+                        # p_i^T*p_i and p_j^T*p_j contributions with negative sign
                         Q[i_offset + dim, i_offset + dim] += 2.0 * self.w4
-                        # p_j^T*p_j term  
                         Q[j_offset + dim, j_offset + dim] += 2.0 * self.w4
-                        # -2*p_i^T*p_j cross terms → set -4*w4 in Q
+                        # Cross terms switch sign accordingly: +4*w4
                         Q[i_offset + dim, j_offset + dim] -= 4.0 * self.w4
                         Q[j_offset + dim, i_offset + dim] -= 4.0 * self.w4
         
@@ -354,7 +352,7 @@ class QPNashSolver:
     def solve_nash_equilibrium(self, 
                              initial_states: torch.Tensor,
                              goals: torch.Tensor,
-                             max_iterations: int = 20,
+                             max_iterations: int = 50,
                              tolerance: float = 1e-3) -> Optional[torch.Tensor]:
         """
         Solve Nash equilibrium using iterative best response.
@@ -440,17 +438,17 @@ class QPNashSolver:
 # Example usage and testing
 if __name__ == "__main__":
     # Create solver
-    solver = QPNashSolver(n_agents=2, horizon=5, dt=0.1)
+    solver = QPNashSolver(n_agents=2, horizon=50, dt=0.1)
     
-    # Test with simple scenario
+    # (position) concatened with inital velocity
     initial_states = torch.tensor([
-        [0.0, 0.0, 0.0, 0.0],  # Agent 1: at origin, stationary
-        [2.0, 2.0, 0.0, 0.0]   # Agent 2: at (2,2), stationary  
+        [0.0, 0.0, 0.0, 0.0],  
+        [2.0, 2.0, 0.0, 0.0]   
     ])
     
     goals = torch.tensor([
-        [5.0, 0.0],  # Agent 1 goal
-        [0.0, 5.0]   # Agent 2 goal (crossing paths)
+        [5.0, 3.0],  
+        [2.0, 5.0]   
     ])
     
     # Solve Nash equilibrium
