@@ -7,6 +7,7 @@ from lqr_plots import LQRPlotter
 import datetime
 import os
 import json
+import random
 
 class Agent(iLQR):
     def __init__(
@@ -150,35 +151,6 @@ class LQRSolver(iLQR):
                 agent.u_traj += step_size * v_traj
 
     def export_trajectories_to_json(self, save_path: str) -> None:
-        """
-        Export agent trajectories, positions, and controls to JSON format.
-        
-        Structure:
-        {
-            "agent_0": {
-                "positions": {
-                    "timestamp_0": [x, y, theta],
-                    "timestamp_1": [x, y, theta],
-                    ...
-                },
-                "trajectories": {
-                    "timestamp_0": [x, y, theta],
-                    "timestamp_1": [x, y, theta],
-                    ...
-                },
-                "controls": {
-                    "timestamp_0": [v, omega],
-                    "timestamp_1": [v, omega],
-                    ...
-                }
-            },
-            "agent_1": { ... },
-            ...
-        }
-        
-        Args:
-            save_path: Path to save the JSON file
-        """
         # Create the main data structure
         data = {}
         
@@ -227,34 +199,78 @@ class LQRSolver(iLQR):
         
         print(f"Trajectory data exported to {save_path}")
 
+def random_init(n_agents: int, 
+                init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray], List[jnp.ndarray]]:
+    init_ps = []
+    init_us = []
+    goals = []
+    
+    min_pos, max_pos = init_position_range
+    pos_range = max_pos - min_pos
+    
+    # Minimum distance between agents to avoid initial collisions
+    min_distance = 0.5 * pos_range / n_agents  # Scale with number of agents
+    
+    max_tries = 1000
+    
+    for agent_id in range(n_agents):
+        # Generate initial position
+        init_pos = None
+        for _ in range(max_tries):
+            x = random.uniform(min_pos, max_pos)
+            y = random.uniform(min_pos, max_pos)
+            theta = random.uniform(-jnp.pi, jnp.pi)
+            
+            candidate_pos = jnp.array([x, y, theta])
+            
+            # Check minimum distance from other agents
+            too_close = False
+            for existing_pos in init_ps:
+                distance = jnp.linalg.norm(candidate_pos[:2] - existing_pos[:2])
+                if distance < min_distance:
+                    too_close = True
+                    break
+            
+            if not too_close:
+                init_pos = candidate_pos
+                break
+        
+        init_ps.append(init_pos)
+        
+        # Generate initial control (random velocity and angular velocity)
+        v = random.uniform(0.3, 1.2)  # Linear velocity
+        omega = random.uniform(-0.5, 0.5)  # Angular velocity
+        init_us.append(jnp.array([v, omega]))
+        
+        # Generate goal position (different from initial position)
+        goal = None
+        for _ in range(max_tries):
+            goal_x = random.uniform(min_pos, max_pos)
+            goal_y = random.uniform(min_pos, max_pos)
+            candidate_goal = jnp.array([goal_x, goal_y])
+            
+            # Ensure goal is far enough from initial position
+            distance_to_start = jnp.linalg.norm(candidate_goal - init_pos[:2])
+            if distance_to_start > min_distance:
+                goal = candidate_goal
+                break
+        
+        goals.append(goal)
+    
+    return init_ps, init_us, goals
+
+
 if __name__ == "__main__":
-    print("Testing LQRSolver with 3 agents...")
-    
-    init_ps = [
-        jnp.array([-2.0, 0.0, 0.0]),  # (x, y, theta)
-        jnp.array([2.0, 0.0, jnp.pi]),  # facing left
-        jnp.array([0.0, 2.0, -jnp.pi/2]),  # (x, y, theta)
-    ]
-    
-    init_us = [
-        jnp.array([0.8, 0.0]),  # (v, omega) - forward motion
-        jnp.array([0.8, 0.0]),   # forward motion
-        jnp.array([0.8, 0.0])   # forward motion
-    ]
-    
-    goals = [
-        jnp.array([2.0, 0.0]),   # Agent 0 goal
-        jnp.array([-2.0, 0.0]),   # Agent 1 goal
-        jnp.array([0.0, -2.0])   # Agent 2 goal
-    ]
-    
+    n_agents = 4
+    init_ps, init_us, goals = random_init(n_agents=n_agents, init_position_range=(-3.0, 3.0))
+
     # Cost matrices
     Q = jnp.diag(jnp.array([0.1, 0.1, 0.01]))  # State penalties
     R = jnp.diag(jnp.array([1.0, 0.01]))       # Control penalties
     
     # Create solver
     solver = LQRSolver(
-        n_agents=3,
+        n_agents=n_agents,
         init_ps=init_ps,
         init_us=init_us,
         goals=goals,
@@ -264,11 +280,6 @@ if __name__ == "__main__":
         R=R,
         device="cpu"
     )
-    
-    print(f"Created solver with {solver.n_agents} agents")
-    print(f"Agent 0: start={init_ps[0][:2]}, goal={goals[0]}")
-    print(f"Agent 1: start={init_ps[1][:2]}, goal={goals[1]}")
-    print(f"Agent 2: start={init_ps[2][:2]}, goal={goals[2]}")
     
     # Solve the Nash equilibrium
     solver.solve(num_iters=200, step_size=0.002)
