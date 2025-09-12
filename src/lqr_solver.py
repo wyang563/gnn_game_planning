@@ -1,8 +1,12 @@
 import numpy as np
 import jax.numpy as jnp
-from jax import jit, vmap, grad
-from typing import Tuple, Optional, List
+from jax import jit, vmap, grad, devices
+from typing import Tuple, Optional, List, Dict, Any
 from lqrax import iLQR
+from lqr_plots import LQRPlotter
+import datetime
+import os
+import json
 
 class Agent(iLQR):
     def __init__(
@@ -30,7 +34,6 @@ class Agent(iLQR):
 
         # Convert device string to JAX device object
         if isinstance(device, str):
-            from jax import devices
             device = devices(device)[0]
         
         self.jit_linearize_dyn = jit(self.linearize_dyn, device=device)
@@ -146,10 +149,85 @@ class LQRSolver(iLQR):
                     print(f"Agent {agent.id}: loss = {loss:.6f}")
                 agent.u_traj += step_size * v_traj
 
+    def export_trajectories_to_json(self, save_path: str) -> None:
+        """
+        Export agent trajectories, positions, and controls to JSON format.
+        
+        Structure:
+        {
+            "agent_0": {
+                "positions": {
+                    "timestamp_0": [x, y, theta],
+                    "timestamp_1": [x, y, theta],
+                    ...
+                },
+                "trajectories": {
+                    "timestamp_0": [x, y, theta],
+                    "timestamp_1": [x, y, theta],
+                    ...
+                },
+                "controls": {
+                    "timestamp_0": [v, omega],
+                    "timestamp_1": [v, omega],
+                    ...
+                }
+            },
+            "agent_1": { ... },
+            ...
+        }
+        
+        Args:
+            save_path: Path to save the JSON file
+        """
+        # Create the main data structure
+        data = {}
+        
+        # Time stamps (in seconds)
+        timestamps = [i * self.dt for i in range(self.tsteps)]
+        
+        for i, agent in enumerate(self.agents):
+            agent_key = f"agent_{agent.id}"
+            data[agent_key] = {
+                "positions": {},
+                "trajectories": {},
+                "controls": {}
+            }
+            
+            # Add position data (x, y, theta)
+            if agent.x_traj is not None:
+                for t, timestamp in enumerate(timestamps):
+                    if t < len(agent.x_traj):
+                        # Convert JAX array to Python list for JSON serialization
+                        position = agent.x_traj[t].tolist()
+                        data[agent_key]["positions"][f"timestamp_{t}"] = position
+                        data[agent_key]["trajectories"][f"timestamp_{t}"] = position
+            
+            # Add control data (v, omega)
+            if agent.u_traj is not None:
+                for t, timestamp in enumerate(timestamps):
+                    if t < len(agent.u_traj):
+                        # Convert JAX array to Python list for JSON serialization
+                        control = agent.u_traj[t].tolist()
+                        data[agent_key]["controls"][f"timestamp_{t}"] = control
+        
+        # Add metadata
+        data["metadata"] = {
+            "num_agents": self.n_agents,
+            "time_step": self.dt,
+            "total_time_steps": self.tsteps,
+            "total_duration": self.tsteps * self.dt,
+            "export_timestamp": datetime.datetime.now().isoformat(),
+            "agent_initial_positions": [agent.x0.tolist() for agent in self.agents],
+            "agent_goals": [goal.tolist() for goal in self.goals]
+        }
+        
+        # Save to JSON file
+        with open(save_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        print(f"Trajectory data exported to {save_path}")
+
 if __name__ == "__main__":
-    from lqr_plots import LQRPlotter
-    
-    # Example: 3 agents crossing paths
     print("Testing LQRSolver with 3 agents...")
     
     init_ps = [
@@ -200,21 +278,25 @@ if __name__ == "__main__":
     # Create plotter and generate visualizations
     plotter = LQRPlotter(solver)
     
-    # Plot the trajectories
+    output_prefix = f"outputs/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    os.makedirs(output_prefix, exist_ok=True)
+
     print("Plotting trajectories...")
-    plotter.plot_trajectories(save_path="outputs/lqr_trajectories.png")
+    plotter.plot_trajectories(save_path=f"{output_prefix}/lqr_trajectories.png")
     
-    # Create animation
     print("Creating animation...")
-    plotter.plot_trajectory_animation(save_path="outputs/lqr_animation.gif")
+    plotter.plot_trajectory_animation(save_path=f"{output_prefix}/lqr_animation.gif")
     
-    # Plot control inputs
     print("Plotting control inputs...")
-    plotter.plot_control_inputs(save_path="outputs/lqr_controls.png")
+    plotter.plot_control_inputs(save_path=f"{output_prefix}/lqr_controls.png")
     
-    # Plot positions over time
     print("Plotting positions over time...")
-    plotter.plot_agent_positions_over_time(save_path="outputs/lqr_positions.png")
+    plotter.plot_agent_positions_over_time(save_path=f"{output_prefix}/lqr_positions.png")
+    
+    # Export trajectory data to JSON
+    print("Exporting trajectory data to JSON...")
+    solver.export_trajectories_to_json(save_path=f"{output_prefix}/trajectories_detailed.json")
     
     # Print final positions
     print(f"\nFinal positions:")
