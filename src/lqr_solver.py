@@ -28,6 +28,11 @@ class Agent(iLQR):
         self.A_traj: Optional[jnp.ndarray] = None  # will be (T, x_dim, x_dim)
         self.B_traj: Optional[jnp.ndarray] = None  # will be (T, x_dim, u_dim)
 
+        # Convert device string to JAX device object
+        if isinstance(device, str):
+            from jax import devices
+            device = devices(device)[0]
+        
         self.jit_linearize_dyn = jit(self.linearize_dyn, device=device)
         self.jit_solve_ilqr = jit(self.solve, device=device)
         self.jit_loss = jit(self.loss, device=device)
@@ -142,24 +147,27 @@ class LQRSolver(iLQR):
                 agent.u_traj += step_size * v_traj
 
 if __name__ == "__main__":
-    # Example: 2 agents crossing paths
-    print("Testing LQRSolver with 2 agents...")
+    from lqr_plots import LQRPlotter
     
-    # Agent 0: Start at (-2, 0), goal at (2, 0) - moving right
-    # Agent 1: Start at (2, 0), goal at (-2, 0) - moving left
+    # Example: 3 agents crossing paths
+    print("Testing LQRSolver with 3 agents...")
+    
     init_ps = [
         jnp.array([-2.0, 0.0, 0.0]),  # (x, y, theta)
-        jnp.array([2.0, 0.0, jnp.pi])  # facing left
+        jnp.array([2.0, 0.0, jnp.pi]),  # facing left
+        jnp.array([0.0, 2.0, -jnp.pi/2]),  # (x, y, theta)
     ]
     
     init_us = [
         jnp.array([0.8, 0.0]),  # (v, omega) - forward motion
+        jnp.array([0.8, 0.0]),   # forward motion
         jnp.array([0.8, 0.0])   # forward motion
     ]
     
     goals = [
         jnp.array([2.0, 0.0]),   # Agent 0 goal
-        jnp.array([-2.0, 0.0])   # Agent 1 goal
+        jnp.array([-2.0, 0.0]),   # Agent 1 goal
+        jnp.array([0.0, -2.0])   # Agent 2 goal
     ]
     
     # Cost matrices
@@ -168,7 +176,7 @@ if __name__ == "__main__":
     
     # Create solver
     solver = LQRSolver(
-        n_agents=2,
+        n_agents=3,
         init_ps=init_ps,
         init_us=init_us,
         goals=goals,
@@ -182,21 +190,40 @@ if __name__ == "__main__":
     print(f"Created solver with {solver.n_agents} agents")
     print(f"Agent 0: start={init_ps[0][:2]}, goal={goals[0]}")
     print(f"Agent 1: start={init_ps[1][:2]}, goal={goals[1]}")
+    print(f"Agent 2: start={init_ps[2][:2]}, goal={goals[2]}")
     
     # Solve the Nash equilibrium
     solver.solve(num_iters=200, step_size=0.002)
     
     print("\nSolution completed!")
-    # print(f"Final positions:")
-    # for i, (x_traj, u_traj) in enumerate(zip(x_trajs, u_trajs)):
-    #     final_pos = x_traj[-1][:2]
-    #     print(f"  Agent {i}: {final_pos}")
     
-    # # Check if agents reached their goals
-    # for i, (x_traj, goal) in enumerate(zip(x_trajs, goals)):
-    #     final_pos = x_traj[-1][:2]
-    #     distance = jnp.linalg.norm(final_pos - goal)
-    #     print(f"Agent {i} distance to goal: {distance:.3f}")
+    # Create plotter and generate visualizations
+    plotter = LQRPlotter(solver)
+    
+    # Plot the trajectories
+    print("Plotting trajectories...")
+    plotter.plot_trajectories(save_path="outputs/lqr_trajectories.png")
+    
+    # Create animation
+    print("Creating animation...")
+    plotter.plot_trajectory_animation(save_path="outputs/lqr_animation.gif")
+    
+    # Plot control inputs
+    print("Plotting control inputs...")
+    plotter.plot_control_inputs(save_path="outputs/lqr_controls.png")
+    
+    # Plot positions over time
+    print("Plotting positions over time...")
+    plotter.plot_agent_positions_over_time(save_path="outputs/lqr_positions.png")
+    
+    # Print final positions
+    print(f"\nFinal positions:")
+    for i, agent in enumerate(solver.agents):
+        if agent.x_traj is not None:
+            final_pos = agent.x_traj[-1][:2]
+            goal = goals[i]
+            distance = jnp.linalg.norm(final_pos - goal)
+            print(f"  Agent {i}: pos={final_pos}, goal={goal}, dist={distance:.3f}")
 
 
 
