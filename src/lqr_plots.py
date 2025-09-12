@@ -3,6 +3,8 @@ import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
 from typing import Tuple, Optional, List
 import jax.numpy as jnp
+import json
+import datetime
 
 
 class LQRPlotter:
@@ -325,3 +327,50 @@ class LQRPlotter:
             print(f"Positions plot saved to {save_path}")
         
         plt.show()
+
+    def export_trajectories_to_json(self, save_path: str) -> None:
+        """Export agents' trajectories and controls to a JSON file."""
+        data = {}
+        
+        # Time stamps (in seconds)
+        timestamps = [i * self.solver.dt for i in range(self.solver.tsteps)]
+        
+        for i, agent in enumerate(self.solver.agents):
+            agent_key = f"agent_{agent.id}"
+            data[agent_key] = {
+                "positions": {},
+                "trajectories": {},
+                "controls": {}
+            }
+            
+            # Add position data (x, y, theta)
+            if agent.x_traj is not None:
+                for t, timestamp in enumerate(timestamps):
+                    if t < len(agent.x_traj):
+                        position = agent.x_traj[t].tolist()
+                        data[agent_key]["positions"][f"timestamp_{t}"] = position
+                        data[agent_key]["trajectories"][f"timestamp_{t}"] = position
+            
+            # Add control data (v, omega)
+            if agent.u_traj is not None:
+                for t, timestamp in enumerate(timestamps):
+                    if t < len(agent.u_traj):
+                        control = agent.u_traj[t].tolist()
+                        data[agent_key]["controls"][f"timestamp_{t}"] = control
+        
+        # Add metadata
+        data["metadata"] = {
+            "num_agents": self.solver.n_agents,
+            "time_step": self.solver.dt,
+            "total_time_steps": self.solver.tsteps,
+            "total_duration": self.solver.tsteps * self.solver.dt,
+            "export_timestamp": datetime.datetime.now().isoformat(),
+            "agent_initial_positions": [agent.x0.tolist() for agent in self.solver.agents],
+            "agent_goals": [goal.tolist() for goal in self.solver.goals]
+        }
+        
+        # Save to JSON file
+        with open(save_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        print(f"Trajectory data exported to {save_path}")
