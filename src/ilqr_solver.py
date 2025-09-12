@@ -57,11 +57,13 @@ class Agent(iLQR):
     ) -> jnp.ndarray:
         nav_loss: jnp.ndarray = jnp.sum(jnp.square(xt[:2]-ref_xt))
 
+        collision_loss = 0.0
         if other_xts.shape[0] > 0:  
-            d2 = jnp.sum(jnp.square(xt[:2] - other_xts[:, :2]), axis=1)
-            collision_loss = jnp.sum(10.0 * jnp.exp(-5.0 * d2))
-        else:
-            collision_loss = 0.0
+            # TODO: optimize this with JNP later in one operation
+            for other_xt in other_xts:
+                collision_loss += 10.0 * jnp.exp(-5.0 * jnp.sum(jnp.square(xt[:2] - other_xt[:2])))
+            # normalize collision loss 
+            collision_loss /= other_xts.shape[0]
             
         ctrl_loss: jnp.ndarray = 0.1 * jnp.sum(jnp.square(ut * jnp.array([1.0, 0.01])))
         return nav_loss + collision_loss + ctrl_loss
@@ -85,8 +87,8 @@ class Agent(iLQR):
     ) -> Tuple[jnp.ndarray, jnp.ndarray]:
         dldx = grad(self.runtime_loss, argnums=(0))
         dldu = grad(self.runtime_loss, argnums=(1))
-        a_traj: jnp.ndarray = vmap(dldx, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs)  # (T, x_dim)
-        b_traj: jnp.ndarray = vmap(dldu, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs)  # (T, u_dim)
+        a_traj = vmap(dldx, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs)  
+        b_traj = vmap(dldu, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs) 
         return a_traj, b_traj
 
 class LQRSolver(iLQR):
@@ -121,7 +123,7 @@ class LQRSolver(iLQR):
             agent = Agent(i, dt, x_dim=3, u_dim=2, Q=Q, R=R, x0=x0, u_traj=u_traj, ref_traj=ref_traj, device=device)
             self.agents.append(agent)
     
-    def solve(self, num_iters: int = 200, step_size: float = 0.002):
+    def solve_state(self, num_iters: int = 200, step_size: float = 0.002):
         for iter in range(num_iters + 1):
             for agent in self.agents:
                 agent.x_traj, agent.A_traj, agent.B_traj = agent.jit_linearize_dyn(
@@ -151,7 +153,6 @@ class LQRSolver(iLQR):
                     )
                     print(f"iter[{iter:3d}/{num_iters}] Agent {agent.id}: loss = {loss:.6f}")
             
-            # Third: apply all control updates simultaneously
             for i, agent in enumerate(self.agents):
                 agent.u_traj += step_size * v_trajs[i]
 
@@ -219,10 +220,10 @@ def random_init(n_agents: int,
 
 if __name__ == "__main__":
     # parameters we can toggle
-    n_agents = 4
+    n_agents = 3
     solver_iters = 200  # Increased for better convergence
-    step_size = 0.001
-    tsteps = 200
+    step_size = 0.002
+    tsteps = 100
     dt = 0.05
     Q = jnp.diag(jnp.array([0.1, 0.1, 0.01]))  # State penalties
     R = jnp.diag(jnp.array([1.0, 0.01]))       # Control penalties
