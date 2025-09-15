@@ -1,376 +1,267 @@
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 from matplotlib.animation import FuncAnimation
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Sequence
 import jax.numpy as jnp
 import json
 import datetime
 
 
-class LQRPlotter:
-    """Plotting utilities for LQR multi-agent trajectory visualization."""
-    
-    def __init__(self, solver):
-        """
-        Initialize plotter with a reference to the LQRSolver.
-        
+class LQRPlots:
+    """Plotting utilities for LQR multi-agent trajectories, controls, and repulsion fields.
+
+    This class mirrors the API style of `old_solvers/ilqr_plots.py` but is adapted to work
+    directly with the current `Agent` class and arrays returned by `solve_single_agent`.
+    """
+
+    def __init__(
+        self,
+        agents: Sequence,
+        goals: Sequence[jnp.ndarray],
+        results: Sequence[Tuple[jnp.ndarray, jnp.ndarray]],
+        dt: float,
+        horizon: int,
+        other_agent_positions_list: Optional[Sequence[Optional[jnp.ndarray]]] = None,
+    ) -> None:
+        """Initialize plotter.
+
         Args:
-            solver: LQRSolver instance containing agents and their trajectories
+            agents: List of `Agent` instances.
+            goals: List of goal positions for each agent, shape (2,) per agent.
+            results: Per-agent tuples of (u_traj, x_traj).
+            dt: Time step used in planning.
+            horizon: Number of time steps.
+            other_agent_positions_list: Optional list where each element is (T, M, 2)
+                other agents' predicted positions used when solving agent i. If None,
+                repulsion plotting will be skipped.
         """
-        self.solver = solver
-    
-    def plot_trajectories(self, 
-                         figsize: Tuple[int, int] = (10, 8),
-                         show_arrows: bool = True,
-                         arrow_interval: int = 5,
-                         save_path: Optional[str] = None) -> None:
-        """
-        Plot the trajectories of all agents with start/goal markers.
-        
-        Args:
-            figsize: Figure size (width, height)
-            show_arrows: Whether to show direction arrows along trajectories
-            arrow_interval: Show arrow every N time steps
-            save_path: Optional path to save the plot
-        """
+        self.agents = list(agents)
+        self.goals = list(goals)
+        self.results = list(results)
+        self.dt = dt
+        self.tsteps = horizon
+        self.other_agent_positions_list = (
+            list(other_agent_positions_list) if other_agent_positions_list is not None else None
+        )
+
+    def plot_trajectories(
+        self,
+        figsize: Tuple[int, int] = (10, 8),
+        show_arrows: bool = True,
+        arrow_interval: int = 5,
+        save_path: Optional[str] = None,
+    ) -> None:
         fig, ax = plt.subplots(1, 1, figsize=figsize)
-        
-        # Color palette for different agents
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', 
-                 '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
-        
-        # Marker styles for different agents
+
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+                  '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
         markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h']
-        
-        for i, agent in enumerate(self.solver.agents):
+
+        for i, agent in enumerate(self.agents):
             color = colors[i % len(colors)]
             marker = markers[i % len(markers)]
-            
-            # Get trajectory data
-            x_traj = agent.x_traj
+
+            u_traj, x_traj = self.results[i]
             if x_traj is None:
-                print(f"Warning: Agent {agent.id} has no trajectory data")
+                print(f"Warning: Agent {i} has no trajectory data")
                 continue
-                
-            # Extract x, y coordinates
+
             x_coords = x_traj[:, 0]
             y_coords = x_traj[:, 1]
-            
-            # Plot trajectory line
-            ax.plot(x_coords, y_coords, color=color, linewidth=2, alpha=0.7, 
-                   label=f'Agent {agent.id} trajectory')
-            
-            # Plot start point
-            start_x, start_y = agent.x0[0], agent.x0[1]
-            ax.scatter(start_x, start_y, color=color, s=100, marker='o', 
-                      edgecolors='black', linewidth=2, zorder=5,
-                      label=f'Agent {agent.id} start')
-            
-            # Plot goal point
-            goal_x, goal_y = self.solver.goals[i][0], self.solver.goals[i][1]
-            ax.scatter(goal_x, goal_y, color=color, s=100, marker='*', 
-                      edgecolors='black', linewidth=2, zorder=5,
-                      label=f'Agent {agent.id} goal')
-            
-            # Add direction arrows along trajectory
+            ax.plot(x_coords, y_coords, color=color, linewidth=2, alpha=0.7,
+                    label=f'Agent {i} trajectory')
+
+            start_x, start_y = float(agent.x0[0]), float(agent.x0[1])
+            ax.scatter(start_x, start_y, color=color, s=100, marker='o',
+                       edgecolors='black', linewidth=2, zorder=5,
+                       label=f'Agent {i} start')
+
+            goal_x, goal_y = float(self.goals[i][0]), float(self.goals[i][1])
+            ax.scatter(goal_x, goal_y, color=color, s=120, marker='*',
+                       edgecolors='black', linewidth=2, zorder=5,
+                       label=f'Agent {i} goal')
+
             if show_arrows and len(x_coords) > arrow_interval:
-                for t in range(0, len(x_coords)-1, arrow_interval):
+                for t in range(0, len(x_coords) - 1, arrow_interval):
                     if t + 1 < len(x_coords):
-                        dx = x_coords[t+1] - x_coords[t]
-                        dy = y_coords[t+1] - y_coords[t]
-                        if abs(dx) > 1e-6 or abs(dy) > 1e-6:  # Only draw if movement is significant
-                            ax.arrow(x_coords[t], y_coords[t], dx*0.3, dy*0.3,
-                                   head_width=0.1, head_length=0.1, fc=color, ec=color, alpha=0.6)
-            
-            # Add agent ID labels at start and goal
-            ax.annotate(f'Start {agent.id}', (start_x, start_y), 
-                       xytext=(5, 5), textcoords='offset points', fontsize=8, color=color)
-            ax.annotate(f'Goal {agent.id}', (goal_x, goal_y), 
-                       xytext=(5, 5), textcoords='offset points', fontsize=8, color=color)
-        
-        # Set plot properties
+                        dx = x_coords[t + 1] - x_coords[t]
+                        dy = y_coords[t + 1] - y_coords[t]
+                        if abs(dx) > 1e-6 or abs(dy) > 1e-6:
+                            ax.arrow(x_coords[t], y_coords[t], dx * 0.3, dy * 0.3,
+                                     head_width=0.1, head_length=0.1,
+                                     fc=color, ec=color, alpha=0.6)
+
+            ax.annotate(f'Start {i}', (start_x, start_y),
+                        xytext=(5, 5), textcoords='offset points', fontsize=8, color=color)
+            ax.annotate(f'Goal {i}', (goal_x, goal_y),
+                        xytext=(5, 5), textcoords='offset points', fontsize=8, color=color)
+
         ax.set_xlabel('X Position', fontsize=12)
         ax.set_ylabel('Y Position', fontsize=12)
-        ax.set_title('Multi-Agent Trajectory Planning', fontsize=14, fontweight='bold')
+        ax.set_title('LQR Multi-Agent Trajectories', fontsize=14, fontweight='bold')
         ax.grid(True, alpha=0.3)
         ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax.set_aspect('equal')
-        
-        # Add some padding around the trajectories
+
         all_x = []
         all_y = []
-        for agent in self.solver.agents:
-            if agent.x_traj is not None:
-                all_x.extend(agent.x_traj[:, 0])
-                all_y.extend(agent.x_traj[:, 1])
-        
+        for _, x_traj in self.results:
+            if x_traj is not None:
+                all_x.extend(x_traj[:, 0])
+                all_y.extend(x_traj[:, 1])
+
         if all_x and all_y:
             x_margin = (max(all_x) - min(all_x)) * 0.1
             y_margin = (max(all_y) - min(all_y)) * 0.1
             ax.set_xlim(min(all_x) - x_margin, max(all_x) + x_margin)
             ax.set_ylim(min(all_y) - y_margin, max(all_y) + y_margin)
-        
+
         plt.tight_layout()
-        
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Plot saved to {save_path}")
-        
         plt.show()
 
-    def plot_trajectory_animation(self, 
-                                 interval: int = 50,
-                                 save_path: Optional[str] = None) -> None:
-        """
-        Create an animated plot showing agents moving along their trajectories.
-        
-        Args:
-            interval: Animation frame interval in milliseconds
-            save_path: Optional path to save the animation as GIF
-        """
-        fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-        
-        # Color palette
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-        
-        # Initialize plot elements
-        lines = []
-        points = []
-        goal_points = []
-        
-        for i, agent in enumerate(self.solver.agents):
-            color = colors[i % len(colors)]
-            
-            # Plot full trajectory as background
-            if agent.x_traj is not None:
-                x_coords = agent.x_traj[:, 0]
-                y_coords = agent.x_traj[:, 1]
-                line, = ax.plot(x_coords, y_coords, color=color, alpha=0.3, linewidth=1)
-                lines.append(line)
-                
-                # Current position point
-                point, = ax.plot([], [], color=color, marker='o', markersize=8, 
-                               markeredgecolor='black', markeredgewidth=1)
-                points.append(point)
-                
-                # Goal point
-                goal_x, goal_y = self.solver.goals[i][0], self.solver.goals[i][1]
-                goal_point, = ax.plot(goal_x, goal_y, color=color, marker='*', 
-                                    markersize=15, markeredgecolor='black', markeredgewidth=1)
-                goal_points.append(goal_point)
-        
-        def animate(frame):
-            for i, agent in enumerate(self.solver.agents):
-                if agent.x_traj is not None and frame < len(agent.x_traj):
-                    x = agent.x_traj[frame, 0]
-                    y = agent.x_traj[frame, 1]
-                    points[i].set_data([x], [y])
-            return points + goal_points
-        
-        # Get trajectory length
-        max_length = max(len(agent.x_traj) for agent in self.solver.agents if agent.x_traj is not None)
-        
-        ax.set_xlabel('X Position')
-        ax.set_ylabel('Y Position')
-        ax.set_title('Multi-Agent Trajectory Animation')
-        ax.grid(True, alpha=0.3)
-        ax.set_aspect('equal')
-        
-        # Set axis limits
-        all_x = []
-        all_y = []
-        for agent in self.solver.agents:
-            if agent.x_traj is not None:
-                all_x.extend(agent.x_traj[:, 0])
-                all_y.extend(agent.x_traj[:, 1])
-        
-        if all_x and all_y:
-            x_margin = (max(all_x) - min(all_x)) * 0.1
-            y_margin = (max(all_y) - min(all_y)) * 0.1
-            ax.set_xlim(min(all_x) - x_margin, max(all_x) + x_margin)
-            ax.set_ylim(min(all_y) - y_margin, max(all_y) + y_margin)
-        
-        # Create animation
-        anim = FuncAnimation(fig, animate, frames=max_length, interval=interval, 
-                           blit=True, repeat=True)
-        
-        if save_path:
-            anim.save(save_path, writer='pillow', fps=10)
-            print(f"Animation saved to {save_path}")
-        
-        plt.show()
-        return anim
-
-    def plot_loss_curves(self, 
-                        figsize: Tuple[int, int] = (10, 6),
-                        save_path: Optional[str] = None) -> None:
-        """
-        Plot the loss curves for all agents over iterations.
-        
-        Args:
-            figsize: Figure size (width, height)
-            save_path: Optional path to save the plot
-        """
-        fig, ax = plt.subplots(1, 1, figsize=figsize)
-        
-        # Color palette
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-        
-        for i, agent in enumerate(self.solver.agents):
-            color = colors[i % len(colors)]
-            # Note: This would need loss history to be stored during optimization
-            # For now, this is a placeholder for future implementation
-            ax.plot([], [], color=color, linewidth=2, label=f'Agent {agent.id}')
-        
-        ax.set_xlabel('Iteration', fontsize=12)
-        ax.set_ylabel('Loss', fontsize=12)
-        ax.set_title('Agent Loss Curves', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        ax.legend()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"Loss curves plot saved to {save_path}")
-        
-        plt.show()
-
-    def plot_control_inputs(self, 
-                           figsize: Tuple[int, int] = (12, 8),
-                           save_path: Optional[str] = None) -> None:
-        """
-        Plot the control inputs (velocity and angular velocity) for all agents.
-        
-        Args:
-            figsize: Figure size (width, height)
-            save_path: Optional path to save the plot
-        """
+    def plot_control_inputs(
+        self,
+        figsize: Tuple[int, int] = (12, 8),
+        save_path: Optional[str] = None,
+    ) -> None:
         fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
-        
-        # Color palette
+
         colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-        
-        time_steps = jnp.arange(self.solver.tsteps) * self.solver.dt
-        
-        for i, agent in enumerate(self.solver.agents):
+        time_steps = jnp.arange(self.tsteps) * self.dt
+
+        for i, (u_traj, _x_traj) in enumerate(self.results):
             color = colors[i % len(colors)]
-            
-            if agent.u_traj is not None:
-                # Plot linear velocity
-                axes[0].plot(time_steps, agent.u_traj[:, 0], color=color, 
-                           linewidth=2, label=f'Agent {agent.id}')
-                
-                # Plot angular velocity
-                axes[1].plot(time_steps, agent.u_traj[:, 1], color=color, 
-                           linewidth=2, label=f'Agent {agent.id}')
-        
-        axes[0].set_ylabel('Linear Velocity (v)', fontsize=12)
+            if u_traj is not None:
+                axes[0].plot(time_steps[: len(u_traj)], u_traj[:, 0], color=color,
+                             linewidth=2, label=f'Agent {i}')
+                axes[1].plot(time_steps[: len(u_traj)], u_traj[:, 1], color=color,
+                             linewidth=2, label=f'Agent {i}')
+
+        axes[0].set_ylabel('a_x', fontsize=12)
         axes[0].set_title('Control Inputs Over Time', fontsize=14, fontweight='bold')
         axes[0].grid(True, alpha=0.3)
         axes[0].legend()
-        
+
         axes[1].set_xlabel('Time (s)', fontsize=12)
-        axes[1].set_ylabel('Angular Velocity (ω)', fontsize=12)
+        axes[1].set_ylabel('a_y', fontsize=12)
         axes[1].grid(True, alpha=0.3)
         axes[1].legend()
-        
+
         plt.tight_layout()
-        
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Control inputs plot saved to {save_path}")
-        
         plt.show()
 
-    def plot_agent_positions_over_time(self, 
-                                     figsize: Tuple[int, int] = (12, 8),
-                                     save_path: Optional[str] = None) -> None:
+    def plot_repulsion_fields(
+        self,
+        arrow_interval: int = 4,
+        scale: float = 1.0,
+        figsize: Tuple[int, int] = (10, 8),
+        save_path: Optional[str] = None,
+    ) -> None:
+        """Plot repulsive vectors along each agent's actual trajectory.
+
+        Requires `other_agent_positions_list` to have been provided.
         """
-        Plot the x and y positions of all agents over time.
-        
-        Args:
-            figsize: Figure size (width, height)
-            save_path: Optional path to save the plot
-        """
-        fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True)
-        
-        # Color palette
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-        
-        time_steps = jnp.arange(self.solver.tsteps) * self.solver.dt
-        
-        for i, agent in enumerate(self.solver.agents):
+        if self.other_agent_positions_list is None:
+            print("No other agents' predicted positions provided; skipping repulsion plot.")
+            return
+
+        fig, ax = plt.subplots(1, 1, figsize=figsize)
+
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+                  '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+
+        for i, agent in enumerate(self.agents):
             color = colors[i % len(colors)]
-            
-            if agent.x_traj is not None:
-                # Plot x position
-                axes[0].plot(time_steps, agent.x_traj[:, 0], color=color, 
-                           linewidth=2, label=f'Agent {agent.id}')
-                
-                # Plot y position
-                axes[1].plot(time_steps, agent.x_traj[:, 1], color=color, 
-                           linewidth=2, label=f'Agent {agent.id}')
-        
-        axes[0].set_ylabel('X Position', fontsize=12)
-        axes[0].set_title('Agent Positions Over Time', fontsize=14, fontweight='bold')
-        axes[0].grid(True, alpha=0.3)
-        axes[0].legend()
-        
-        axes[1].set_xlabel('Time (s)', fontsize=12)
-        axes[1].set_ylabel('Y Position', fontsize=12)
-        axes[1].grid(True, alpha=0.3)
-        axes[1].legend()
-        
+            u_traj, x_traj = self.results[i]
+            other_positions = self.other_agent_positions_list[i]
+            if x_traj is None or other_positions is None:
+                continue
+
+            pos_i = x_traj[: self.tsteps, :2]  # (T, 2)
+            # Compute repulsion vectors: sum_j alpha * (p_i - p_j) / (||...||^2 + eps)^(3/2)
+            if other_positions.shape[1] > 0:
+                d = pos_i[:, None, :] - other_positions  # (T, M, 2)
+                r2 = jnp.sum(d ** 2, axis=2) + agent.repulsion_epsilon  # (T, M)
+                rep_j = agent.repulsion_gain * d / (r2[:, :, None] ** (3.0 / 2.0))  # (T, M, 2)
+                repel = jnp.sum(rep_j, axis=1)  # (T, 2)
+            else:
+                repel = jnp.zeros_like(pos_i)
+
+            ax.plot(pos_i[:, 0], pos_i[:, 1], color=color, linewidth=2, alpha=0.6,
+                    label=f'Agent {i} trajectory')
+
+            # Quiver every few steps
+            idxs = list(range(0, len(pos_i), max(1, arrow_interval)))
+            ax.quiver(
+                pos_i[idxs, 0], pos_i[idxs, 1],
+                repel[idxs, 0] * scale, repel[idxs, 1] * scale,
+                angles='xy', scale_units='xy', scale=1.0, color=color, alpha=0.7,
+            )
+
+            # Start/goal markers
+            start_x, start_y = float(agent.x0[0]), float(agent.x0[1])
+            goal_x, goal_y = float(self.goals[i][0]), float(self.goals[i][1])
+            ax.scatter(start_x, start_y, color=color, s=80, marker='o', edgecolors='black', linewidth=1.5)
+            ax.scatter(goal_x, goal_y, color=color, s=120, marker='*', edgecolors='black', linewidth=1.5)
+
+        ax.set_xlabel('X Position', fontsize=12)
+        ax.set_ylabel('Y Position', fontsize=12)
+        ax.set_title('Repulsion Fields Along Trajectories', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.set_aspect('equal')
+
         plt.tight_layout()
-        
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"Positions plot saved to {save_path}")
-        
+            print(f"Repulsion field plot saved to {save_path}")
         plt.show()
 
     def export_trajectories_to_json(self, save_path: str) -> None:
         """Export agents' trajectories and controls to a JSON file."""
         data = {}
-        
-        # Time stamps (in seconds)
-        timestamps = [i * self.solver.dt for i in range(self.solver.tsteps)]
-        
-        for i, agent in enumerate(self.solver.agents):
-            agent_key = f"agent_{agent.id}"
+
+        timestamps = [i * self.dt for i in range(self.tsteps)]
+
+        for i, agent in enumerate(self.agents):
+            u_traj, x_traj = self.results[i]
+            agent_key = f"agent_{i}"
             data[agent_key] = {
                 "positions": {},
                 "trajectories": {},
                 "controls": {}
             }
-            
-            # Add position data (x, y, theta)
-            if agent.x_traj is not None:
+
+            if x_traj is not None:
                 for t, timestamp in enumerate(timestamps):
-                    if t < len(agent.x_traj):
-                        position = agent.x_traj[t].tolist()
+                    if t < len(x_traj):
+                        position = [float(x) for x in x_traj[t].tolist()]
                         data[agent_key]["positions"][f"timestamp_{t}"] = position
                         data[agent_key]["trajectories"][f"timestamp_{t}"] = position
-            
-            # Add control data (v, omega)
-            if agent.u_traj is not None:
+
+            if u_traj is not None:
                 for t, timestamp in enumerate(timestamps):
-                    if t < len(agent.u_traj):
-                        control = agent.u_traj[t].tolist()
+                    if t < len(u_traj):
+                        control = [float(x) for x in u_traj[t].tolist()]
                         data[agent_key]["controls"][f"timestamp_{t}"] = control
-        
-        # Add metadata
+
         data["metadata"] = {
-            "num_agents": self.solver.n_agents,
-            "time_step": self.solver.dt,
-            "total_time_steps": self.solver.tsteps,
-            "total_duration": self.solver.tsteps * self.solver.dt,
+            "num_agents": len(self.agents),
+            "time_step": self.dt,
+            "total_time_steps": self.tsteps,
+            "total_duration": self.tsteps * self.dt,
             "export_timestamp": datetime.datetime.now().isoformat(),
-            "agent_initial_positions": [agent.x0.tolist() for agent in self.solver.agents],
-            "agent_goals": [goal.tolist() for goal in self.solver.goals]
+            "agent_initial_positions": [agent.x0.tolist() for agent in self.agents],
+            "agent_goals": [goal.tolist() for goal in self.goals],
         }
-        
-        # Save to JSON file
+
         with open(save_path, 'w') as f:
             json.dump(data, f, indent=2)
-        
         print(f"Trajectory data exported to {save_path}")
+
+

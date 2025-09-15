@@ -1,9 +1,8 @@
-import numpy as np
 import jax.numpy as jnp
 from jax import jit, vmap, grad, devices
 from typing import Tuple, Optional, List, Dict, Any
 from lqrax import iLQR
-from lqr_plots import LQRPlotter
+from old_solvers.ilqr_plots import LQRPlotter
 import datetime
 import os
 import random
