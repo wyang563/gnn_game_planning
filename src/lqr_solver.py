@@ -48,6 +48,7 @@ class Agent(LQR):
     """
     def __init__(
         self, 
+        id: int,
         dt: float, 
         x_dim: int,
         u_dim: int, 
@@ -65,6 +66,7 @@ class Agent(LQR):
         goal_threshold: float = 0.1,
     ) -> None:
         super().__init__(dt, x_dim, u_dim, Q, R)
+        self.id = id
         self.horizon = horizon
         self.x0 = x0
         self.u0 = u0
@@ -225,20 +227,24 @@ class Simulator:
                  dt: float, 
                  init_arena_range: Tuple[float, float], 
                  device: str = "cpu",
-                 goal_threshold: float = 0.1) -> None: 
+                 goal_threshold: float = 0.1,
+                 max_iters: int = 1000) -> None: 
         self.n_agents = n_agents
         self.Q = Q
         self.R = R
         self.horizon = horizon
         self.dt = dt
+        self.timestep = 0
         self.init_arena_range = init_arena_range
         self.device = devices(device)[0]
         self.goal_threshold = goal_threshold
+        self.agent_trajectories = None
+        self.max_iters = max_iters
         self.setup_sim()
 
     def setup_sim(self) -> None:
         init_ps, init_us, goals = random_init(self.n_agents, self.init_arena_range)
-        self.agents = []
+        self.agents: List[Agent] = []
         for i in range(self.n_agents):
             px, py, theta = float(init_ps[i][0]), float(init_ps[i][1]), float(init_ps[i][2])
             v_i = float(init_us[i][0])
@@ -250,6 +256,7 @@ class Simulator:
             goal_i = goals[i]
 
             agent = Agent(
+                id=i,
                 dt=self.dt, 
                 x_dim=4, 
                 u_dim=2,
@@ -268,15 +275,53 @@ class Simulator:
 
             self.agents.append(agent)
     
-    def run(self) -> None:
-        pass
+    def get_other_player_trajectories(self) -> List[jnp.ndarray]:
+        self.agent_trajectories = [agent.get_ref_traj() for agent in self.agents]
 
+    def sim_step(self) -> None:
+        # run one instance of algorithm 1 in PSN paper
+
+        # get straight line predictions from other agents trajectories
+        self.get_other_player_trajectories()
+        
+        dynamics_results = []
+        for agent in self.agents:
+            if not agent.check_convergence():
+                other_positions_list = []
+                for other_agent in self.agents:
+                    if other_agent.id != agent.id:
+                        other_positions_list.append(self.agent_trajectories[other_agent.id])
+                if len(other_positions_list) == 0:
+                    other_agent_positions = jnp.zeros((self.horizon, 0, 2))
+                else:
+                    other_agent_positions = jnp.stack(other_positions_list, axis=1)
+                
+                u_traj, x_traj = agent.solve_single_agent(other_agent_positions)
+                dynamics_results.append((agent.id, u_traj, x_traj))
+        
+        # increment dynamics of agents
+        for agent_id, u_traj, x_traj in dynamics_results:
+            self.agents[agent_id].x0 = x_traj[0]
+            self.agents[agent_id].u0 = u_traj[0]
+
+        self.timestep += self.dt
+    
+    def run(self) -> None:
+        for _ in range(self.max_iters):
+            self.sim_step()
+        
+        # check convergence
+        for agent in self.agents:
+            print(f"Agent {agent.id}: final_distance_to_goal={jnp.linalg.norm(agent.x0[:2] - agent.goal):.3f}, converged={agent.check_convergence()}")
 
 if __name__ == "__main__":
     # Simple multi-agent demo: create N agents, compute trajectories, and check convergence
     N = 3
     horizon = 40
     dt = 0.1
+    init_arena_range = (-5.0, 5.0)
+    goal_threshold = 0.1
+    device = "cpu"
 
     # # Reproducibility
     # random.seed(42)
@@ -285,69 +330,16 @@ if __name__ == "__main__":
     Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))
     R = jnp.eye(2) * 0.1
 
-    # Random initial states/controls/goals
-    init_ps, init_us, goals = random_init(N, (-5.0, 5.0))
-
-    # Build agents
-    agents = []
-    for i in range(N):
-        px, py, theta = float(init_ps[i][0]), float(init_ps[i][1]), float(init_ps[i][2])
-        v_i = float(init_us[i][0])
-        vx_i = v_i * jnp.cos(theta)
-        vy_i = v_i * jnp.sin(theta)
-
-        x0 = jnp.array([px, py, vx_i, vy_i])
-        u0 = jnp.array([0.0, 0.0])
-        goal_i = goals[i]
-
-        agent = Agent(
-            dt=dt,
-            x_dim=4,
-            u_dim=2,
-            Q=Q,
-            R=R,
-            horizon=horizon,
-            x0=x0,
-            u0=u0,
-            goal=goal_i,
-            device="cpu",
-            repulsion_gain=1.0,
-            repulsion_epsilon=0.1,
-            max_velocity=2.0,
-            max_acceleration=2.0,
-        )
-        agents.append(agent)
-
     # Create simulator    
+    simulator = Simulator(
+        n_agents=N,
+        Q=Q,
+        R=R,
+        horizon=horizon,
+        dt=dt,
+        init_arena_range=init_arena_range,
+        device=device,
+        goal_threshold=goal_threshold
+    )
 
-    # Precompute straight-line predicted positions for other agents as baseline forecasts
-    straight_line_preds = []
-    for agent in agents:
-        straight_line_preds.append(agent.get_ref_traj())
-
-    # Solve for each agent using others' baseline predictions
-    results = []
-    for i, agent in enumerate(agents):
-        other_positions_list = []
-        for j in range(N):
-            if j != i:
-                other_positions_list.append(straight_line_preds[j])
-        if len(other_positions_list) == 0:
-            other_agent_positions = jnp.zeros((horizon, 0, 2))
-        else:
-            other_agent_positions = jnp.stack(other_positions_list, axis=1)  # (T, M, 2)
-
-        u_traj, x_traj = agent.solve_single_agent(other_agent_positions)
-        results.append((u_traj, x_traj))
-
-    # Check convergence: final position close to goal
-    tol = 0.2
-    num_converged = 0
-    for i, (u_traj, x_traj) in enumerate(results):
-        final_pos = x_traj[-1, :2]
-        dist = float(jnp.linalg.norm(final_pos - goals[i]))
-        converged = dist < tol
-        num_converged += int(converged)
-        print(f"Agent {i}: final_distance_to_goal={dist:.3f}, converged={converged}")
-
-    print(f"Converged {num_converged}/{N} agents within tolerance {tol}.")
+    simulator.run()
