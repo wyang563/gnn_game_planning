@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 from jax import jit, vmap, grad, devices
 from typing import Tuple, Optional, List, Dict, Any
@@ -6,6 +7,7 @@ from old_solvers.ilqr_plots import LQRPlotter
 import datetime
 import os
 import random
+from utils.utils import random_init
 
 class Agent(LQR):
     """
@@ -55,20 +57,21 @@ class Agent(LQR):
         x0: jnp.ndarray,
         u0: jnp.ndarray,
         goal: jnp.ndarray,
-        device: str = "cpu",
+        device = devices("cpu")[0],
         repulsion_gain: float = 1.0,
         repulsion_epsilon: float = 0.1,
         max_velocity: float = 2.0,
         max_acceleration: float = 2.0,
+        goal_threshold: float = 0.1,
     ) -> None:
         super().__init__(dt, x_dim, u_dim, Q, R)
         self.horizon = horizon
         self.x0 = x0
         self.u0 = u0
         self.goal = goal
-        self.device = devices(device)[0]
-        self.other_agents = [] # initialized once simulator starts
-        
+        self.device = device
+        self.goal_threshold = goal_threshold
+
         # Game-theoretic parameters
         self.repulsion_gain = repulsion_gain  # α in the math
         self.repulsion_epsilon = repulsion_epsilon  # ε in the math
@@ -101,6 +104,9 @@ class Agent(LQR):
         p0 = self.x0[:2]
         denom = max(self.horizon - 1, 1)
         return p0[None, :] + (k_values[:, None] / denom) * (self.goal[:2] - p0)[None, :]
+    
+    def check_convergence(self) -> bool:
+        return jnp.linalg.norm(self.x0[:2] - self.goal) < self.goal_threshold
 
     def _generate_reference_trajectory(self, other_agent_positions: jnp.ndarray) -> jnp.ndarray:
         """
@@ -210,65 +216,61 @@ class Agent(LQR):
         
         return u_traj, x_traj
 
-def random_init(n_agents: int, 
-                init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray], List[jnp.ndarray]]:
-    init_ps = []
-    init_us = []
-    goals = []
+class Simulator:
+    def __init__(self, 
+                 n_agents: int,
+                 Q: jnp.ndarray,
+                 R: jnp.ndarray, 
+                 horizon: int, 
+                 dt: float, 
+                 init_arena_range: Tuple[float, float], 
+                 device: str = "cpu",
+                 goal_threshold: float = 0.1) -> None: 
+        self.n_agents = n_agents
+        self.Q = Q
+        self.R = R
+        self.horizon = horizon
+        self.dt = dt
+        self.init_arena_range = init_arena_range
+        self.device = devices(device)[0]
+        self.goal_threshold = goal_threshold
+        self.setup_sim()
+
+    def setup_sim(self) -> None:
+        init_ps, init_us, goals = random_init(self.n_agents, self.init_arena_range)
+        self.agents = []
+        for i in range(self.n_agents):
+            px, py, theta = float(init_ps[i][0]), float(init_ps[i][1]), float(init_ps[i][2])
+            v_i = float(init_us[i][0])
+            vx_i = v_i * jnp.cos(theta)
+            vy_i = v_i * jnp.sin(theta)
+
+            x0 = jnp.array([px, py, vx_i, vy_i])
+            u0 = jnp.array([0.0, 0.0])
+            goal_i = goals[i]
+
+            agent = Agent(
+                dt=self.dt, 
+                x_dim=4, 
+                u_dim=2,
+                Q=self.Q,
+                R=self.R,
+                horizon=self.horizon,
+                x0=x0,
+                u0=u0,
+                goal=goal_i,
+                device=self.device,
+                repulsion_gain=1.0,
+                repulsion_epsilon=0.1,
+                max_velocity=2.0,
+                max_acceleration=2.0
+            )
+
+            self.agents.append(agent)
     
-    min_pos, max_pos = init_position_range
-    pos_range = max_pos - min_pos
-    
-    # Minimum distance between agents to avoid initial collisions
-    min_distance = 0.5 * pos_range / n_agents  # Scale with number of agents
-    
-    max_tries = 1000
-    
-    for _ in range(n_agents):
-        # Generate initial position
-        init_pos = None
-        for _ in range(max_tries):
-            x = random.uniform(min_pos, max_pos)
-            y = random.uniform(min_pos, max_pos)
-            theta = random.uniform(-jnp.pi, jnp.pi)
-            
-            candidate_pos = jnp.array([x, y, theta])
-            
-            # Check minimum distance from other agents
-            too_close = False
-            for existing_pos in init_ps:
-                distance = jnp.linalg.norm(candidate_pos[:2] - existing_pos[:2])
-                if distance < min_distance:
-                    too_close = True
-                    break
-            
-            if not too_close:
-                init_pos = candidate_pos
-                break
-        
-        init_ps.append(init_pos)
-        
-        # Generate initial control (random velocity and angular velocity)
-        v = random.uniform(0.3, 1.2)  # Linear velocity
-        omega = random.uniform(-0.5, 0.5)  # Angular velocity
-        init_us.append(jnp.array([v, omega]))
-        
-        # Generate goal position (different from initial position)
-        goal = None
-        for _ in range(max_tries):
-            goal_x = random.uniform(min_pos, max_pos)
-            goal_y = random.uniform(min_pos, max_pos)
-            candidate_goal = jnp.array([goal_x, goal_y])
-            
-            # Ensure goal is far enough from initial position
-            distance_to_start = jnp.linalg.norm(candidate_goal - init_pos[:2])
-            if distance_to_start > min_distance:
-                goal = candidate_goal
-                break
-        
-        goals.append(goal)
-    
-    return init_ps, init_us, goals
+    def run(self) -> None:
+        pass
+
 
 if __name__ == "__main__":
     # Simple multi-agent demo: create N agents, compute trajectories, and check convergence
@@ -276,8 +278,8 @@ if __name__ == "__main__":
     horizon = 40
     dt = 0.1
 
-    # Reproducibility
-    random.seed(42)
+    # # Reproducibility
+    # random.seed(42)
 
     # Cost weights
     Q = jnp.diag(jnp.array([10.0, 10.0, 1.0, 1.0]))
@@ -290,7 +292,7 @@ if __name__ == "__main__":
     agents = []
     for i in range(N):
         px, py, theta = float(init_ps[i][0]), float(init_ps[i][1]), float(init_ps[i][2])
-        v_i, _omega_i = float(init_us[i][0]), float(init_us[i][1])
+        v_i = float(init_us[i][0])
         vx_i = v_i * jnp.cos(theta)
         vy_i = v_i * jnp.sin(theta)
 
@@ -316,24 +318,20 @@ if __name__ == "__main__":
         )
         agents.append(agent)
 
+    # Create simulator    
+
     # Precompute straight-line predicted positions for other agents as baseline forecasts
-    k_values = jnp.arange(horizon)
-    denom = max(horizon - 1, 1)
-    straight_line_preds = []  # List of (T, 2) arrays for each agent's baseline path
-    for j in range(N):
-        p0_j = init_ps[j][:2]
-        g_j = goals[j]
-        baseline_j = p0_j[None, :] + (k_values[:, None] / denom) * (g_j[None, :] - p0_j[None, :])
-        straight_line_preds.append(baseline_j)
+    straight_line_preds = []
+    for agent in agents:
+        straight_line_preds.append(agent.get_ref_traj())
 
     # Solve for each agent using others' baseline predictions
     results = []
     for i, agent in enumerate(agents):
         other_positions_list = []
         for j in range(N):
-            if j == i:
-                continue
-            other_positions_list.append(straight_line_preds[j])
+            if j != i:
+                other_positions_list.append(straight_line_preds[j])
         if len(other_positions_list) == 0:
             other_agent_positions = jnp.zeros((horizon, 0, 2))
         else:
