@@ -2,8 +2,9 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
 import jax.numpy as jnp
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 import os
+import json
 from datetime import datetime
 
 
@@ -293,21 +294,106 @@ class LQRPlotter:
         
         return filepath
     
-    def plot_all(self, timesteps: int = 50, gif_interval: int = 100) -> dict:
+    def export_data_json(self, filename: Optional[str] = None) -> str:
         """
-        Create all four types of plots.
+        Export agent data (positions and accelerations) to JSON file.
+        
+        Args:
+            filename: Output filename (if None, auto-generates with timestamp)
+            
+        Returns:
+            Path to the created JSON file
+        """
+        if filename is None:
+            filename = "simulation_data.json"
+        
+        filepath = os.path.join(self.output_dir, filename)
+        
+        # Prepare data structure
+        data = {}
+        
+        for i, agent in enumerate(self.agents):
+            agent_data = {
+                "agent_id": int(agent.id),
+                "initial_position": {
+                    "x": float(agent.past_x_traj[0][0]) if len(agent.past_x_traj) > 0 else 0.0,
+                    "y": float(agent.past_x_traj[0][1]) if len(agent.past_x_traj) > 0 else 0.0
+                },
+                "goal_position": {
+                    "x": float(agent.goal[0]),
+                    "y": float(agent.goal[1])
+                },
+                "final_position": {
+                    "x": float(agent.x0[0]),
+                    "y": float(agent.x0[1])
+                },
+                "converged": bool(agent.check_convergence()),
+                "trajectory": [],
+                "accelerations": []
+            }
+            
+            # Add trajectory data (positions over time)
+            for t, state in enumerate(agent.past_x_traj):
+                trajectory_point = {
+                    "timestep": t,
+                    "position": {
+                        "x": float(state[0]),
+                        "y": float(state[1])
+                    },
+                    "velocity": {
+                        "x": float(state[2]),
+                        "y": float(state[3])
+                    }
+                }
+                agent_data["trajectory"].append(trajectory_point)
+            
+            # Add acceleration data (control inputs over time)
+            for t, control in enumerate(agent.past_u_traj):
+                acceleration_point = {
+                    "timestep": t,
+                    "acceleration": {
+                        "x": float(control[0]),
+                        "y": float(control[1])
+                    }
+                }
+                agent_data["accelerations"].append(acceleration_point)
+            
+            data[f"agent_{i}"] = agent_data
+        
+        # Add simulation metadata
+        data["simulation_metadata"] = {
+            "total_agents": self.n_agents,
+            "total_timesteps": len(self.agents[0].past_x_traj) if self.n_agents > 0 and len(self.agents[0].past_x_traj) > 0 else 0,
+            "converged_agents": sum(1 for agent in self.agents if agent.check_convergence()),
+            "export_timestamp": datetime.now().isoformat()
+        }
+        
+        # Save JSON file
+        print(f"Exporting simulation data: {filepath}")
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        return filepath
+    
+    def plot_all(self, timesteps: int = 50, gif_interval: int = 100, create_gif: bool = True) -> dict:
+        """
+        Create all plots and export data.
         
         Args:
             timesteps: Number of timesteps for the GIF animation
             gif_interval: Animation interval in milliseconds
+            create_gif: Whether to create the trajectory GIF animation
             
         Returns:
             Dictionary with paths to all created files
         """
         results = {}
         
-        # Create trajectory GIF
-        results['gif'] = self.create_trajectory_gif(timesteps, gif_interval)
+        # Create trajectory GIF (optional)
+        if create_gif:
+            results['gif'] = self.create_trajectory_gif(timesteps, gif_interval)
+        else:
+            results['gif'] = None
         
         # Create static trajectory plot
         results['trajectories'] = self.plot_trajectories()
@@ -318,16 +404,21 @@ class LQRPlotter:
         # Create loss plot
         results['losses'] = self.plot_losses()
         
-        print(f"\nAll plots created successfully!")
-        print(f"GIF: {results['gif']}")
+        # Export data to JSON
+        results['data_json'] = self.export_data_json()
+        
+        print(f"\nAll plots and data export completed successfully!")
+        if create_gif:
+            print(f"GIF: {results['gif']}")
         print(f"Trajectories: {results['trajectories']}")
         print(f"Accelerations: {results['accelerations']}")
         print(f"Losses: {results['losses']}")
+        print(f"Data JSON: {results['data_json']}")
         
         return results
 
 
-def plot_simulation_results(simulator, timesteps: int = 50, gif_interval: int = 100) -> dict:
+def plot_simulation_results(simulator, timesteps: int = 50, gif_interval: int = 100, create_gif: bool = True) -> dict:
     """
     Convenience function to plot results from a Simulator object.
     
@@ -335,12 +426,13 @@ def plot_simulation_results(simulator, timesteps: int = 50, gif_interval: int = 
         simulator: Simulator object with agents
         timesteps: Number of timesteps for the GIF animation
         gif_interval: Animation interval in milliseconds
+        create_gif: Whether to create the trajectory GIF animation
         
     Returns:
         Dictionary with paths to all created files
     """
     plotter = LQRPlotter(simulator.agents)
-    return plotter.plot_all(timesteps, gif_interval)
+    return plotter.plot_all(timesteps, gif_interval, create_gif)
 
 
 if __name__ == "__main__":
