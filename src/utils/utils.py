@@ -8,9 +8,8 @@ import os
 import random
 
 def random_init(n_agents: int, 
-                init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray], List[jnp.ndarray]]:
+                init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
     init_ps = []
-    init_us = []
     goals = []
     
     min_pos, max_pos = init_position_range
@@ -27,14 +26,13 @@ def random_init(n_agents: int,
         for _ in range(max_tries):
             x = random.uniform(min_pos, max_pos)
             y = random.uniform(min_pos, max_pos)
-            theta = random.uniform(-jnp.pi, jnp.pi)
             
-            candidate_pos = jnp.array([x, y, theta])
+            candidate_pos = jnp.array([x, y])
             
             # Check minimum distance from other agents
             too_close = False
             for existing_pos in init_ps:
-                distance = jnp.linalg.norm(candidate_pos[:2] - existing_pos[:2])
+                distance = jnp.linalg.norm(candidate_pos - existing_pos)
                 if distance < min_distance:
                     too_close = True
                     break
@@ -45,11 +43,6 @@ def random_init(n_agents: int,
         
         init_ps.append(init_pos)
         
-        # Generate initial control (random velocity and angular velocity)
-        v = random.uniform(0.3, 1.2)  # Linear velocity
-        omega = random.uniform(-0.5, 0.5)  # Angular velocity
-        init_us.append(jnp.array([v, omega]))
-        
         # Generate goal position (different from initial position)
         goal = None
         for _ in range(max_tries):
@@ -58,11 +51,11 @@ def random_init(n_agents: int,
             candidate_goal = jnp.array([goal_x, goal_y])
             
             # Ensure goal is far enough from initial position
-            distance_to_start = jnp.linalg.norm(candidate_goal - init_pos[:2])
+            distance_to_start = jnp.linalg.norm(candidate_goal - init_pos)
             if distance_to_start > min_distance:
                 goal = candidate_goal
                 break
         
         goals.append(goal)
     
-    return init_ps, init_us, goals
+    return init_ps, goals
