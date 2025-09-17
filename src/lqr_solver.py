@@ -140,7 +140,8 @@ class Simulator:
                 goal=goal_i,
                 device=self.device,
                 max_velocity=self.max_velocity,
-                max_acceleration=self.max_acceleration
+                max_acceleration=self.max_acceleration,
+                goal_threshold=self.goal_threshold
             )
 
             self.agents.append(agent)
@@ -157,7 +158,7 @@ class Simulator:
             agent.u_traj = jnp.zeros((self.horizon, 2))
         
         # Run horizon-T Nash game optimization iterations
-        for iter in range(self.horizon):
+        for _ in range(self.horizon):
             # Calculate game theoretic action for each agent
             for agent in self.agents:
                 agent.x_traj, agent.A_traj, agent.B_traj = agent.jit_linearize_dyn(
@@ -208,20 +209,27 @@ class Simulator:
             print(f"Agent {agent.id}: final_distance_to_goal={jnp.linalg.norm(agent.x0[:2] - agent.goal):.3f}, converged={agent.check_convergence()}")
 
 if __name__ == "__main__":
-    # Simple multi-agent demo: create N agents, compute trajectories, and check convergence
-    N = 3
-    horizon = 40
-    dt = 0.1
-    init_arena_range = (-5.0, 5.0)
-    goal_threshold = 0.1
+    # Test the new receding horizon Nash game Simulator
+    print("=== Testing Receding Horizon Nash Game Simulator ===")
+    
+    # Simulation parameters
+    N = 2  # Number of agents
+    horizon = 20  # Optimization horizon (T steps)
+    dt = 0.1  # Time step
+    init_arena_range = (-3.0, 3.0)  # Initial position range
+    goal_threshold = 0.2  # Convergence threshold
     device = "cpu"
     max_acceleration = 2.0
     max_velocity = 2.0
-    goal_threshold = 0.1
+    total_iters = 50  # Total simulation steps
 
-    # Cost weights
-    Q = jnp.diag(jnp.array([0.1, 0.1, 0.001, 0.001]))
-    R = jnp.eye(2) * 0.01
+    # Cost weights (position, velocity, control)
+    Q = jnp.diag(jnp.array([1.0, 1.0, 0.1, 0.1]))  # Higher position weights
+    R = jnp.eye(2) * 0.1  # Control cost
+
+    print(f"Parameters: N={N}, horizon={horizon}, dt={dt}, total_iters={total_iters}")
+    print(f"Cost weights - Q: {Q.diagonal()}, R: {R.diagonal()}")
+    print()
 
     # Create simulator    
     simulator = Simulator(
@@ -232,7 +240,18 @@ if __name__ == "__main__":
         dt=dt,
         init_arena_range=init_arena_range,
         device=device,
-        goal_threshold=goal_threshold
+        max_acceleration=max_acceleration,
+        max_velocity=max_velocity,
+        goal_threshold=goal_threshold,
+        total_iters=total_iters
     )
 
-    simulator.run()
+    # Print initial conditions
+    print("Initial conditions:")
+    for i, agent in enumerate(simulator.agents):
+        print(f"  Agent {i}: pos=({agent.x0[0]:.2f}, {agent.x0[1]:.2f}), goal=({agent.goal[0]:.2f}, {agent.goal[1]:.2f})")
+    print()
+
+    # Run simulation with progress updates
+    print("Running simulation...")
+    simulator.run() 
