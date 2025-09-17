@@ -2,7 +2,6 @@ import jax.numpy as jnp
 from jax import jit, vmap, grad, devices
 from typing import Tuple, Optional, List, Dict, Any
 from lqrax import LQR
-from old_solvers.ilqr_plots import LQRPlotter
 import datetime
 import os
 import random

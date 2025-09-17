@@ -3,11 +3,11 @@ import jax.numpy as jnp
 from jax import jit, vmap, grad, devices
 from typing import Tuple, Optional, List, Dict, Any
 from lqrax import iLQR
-from old_solvers.ilqr_plots import LQRPlotter
 import datetime
 import os
 import random
 from utils.utils import random_init
+from utils.lqr_plots import LQRPlotter, plot_simulation_results
 
 class Agent(iLQR):
     def __init__(
@@ -40,9 +40,10 @@ class Agent(iLQR):
         self.A_traj: Optional[jnp.ndarray] = None 
         self.B_traj: Optional[jnp.ndarray] = None
 
-        # past trajectories/controls
+        # values for logging
         self.past_x_traj: List[jnp.ndarray] = []
         self.past_u_traj: List[jnp.ndarray] = []
+        self.past_loss: List[float] = []
 
         # Game-theoretic parameters
         self.max_velocity = max_velocity  # v̄ for velocity clamping
@@ -59,7 +60,7 @@ class Agent(iLQR):
     
     # define loss functions
     def runtime_loss(self, xt, ut, ref_xt, other_xts):
-        nav_loss: jnp.ndarray = jnp.sum(jnp.square(xt[:2]-ref_xt))
+        nav_loss: jnp.ndarray = jnp.sum(jnp.square(xt[:2]-ref_xt[:2]))
 
         collision_loss = 0.0
         if other_xts.shape[0] > 0:  
@@ -69,7 +70,7 @@ class Agent(iLQR):
             # normalize collision loss 
             collision_loss /= other_xts.shape[0]
             
-        ctrl_loss: jnp.ndarray = 0.1 * jnp.sum(jnp.square(ut * jnp.array([1.0, 0.01])))
+        ctrl_loss: jnp.ndarray = 0.1 * jnp.sum(jnp.square(ut * jnp.array([1.0, 0.5])))
         return nav_loss + collision_loss + ctrl_loss
 
     def loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs):
@@ -91,18 +92,23 @@ class Agent(iLQR):
         return jnp.linalg.norm(self.x0[:2] - self.goal) < self.goal_threshold
 
 class Simulator:
-    def __init__(self, 
-                 n_agents: int,
-                 Q: jnp.ndarray,
-                 R: jnp.ndarray, 
-                 horizon: int, 
-                 dt: float, 
-                 init_arena_range: Tuple[float, float], 
-                 device: str = "cpu",
-                 max_acceleration: float = 2.0,
-                 max_velocity: float = 2.0,
-                 goal_threshold: float = 0.1,
-                 total_iters: int = 1000) -> None: 
+    def __init__(
+        self, 
+        n_agents: int,
+        Q: jnp.ndarray,
+        R: jnp.ndarray, 
+        horizon: int, 
+        dt: float, 
+        init_arena_range: Tuple[float, float], 
+        device: str = "cpu",
+        max_acceleration: float = 2.0,
+        max_velocity: float = 2.0,
+        goal_threshold: float = 0.1,
+        total_iters: int = 1000,
+        init_ps: List[jnp.ndarray] = None,
+        goals: List[jnp.ndarray] = None,
+    ) -> None: 
+
         self.n_agents = n_agents
         self.Q = Q
         self.R = R
@@ -117,10 +123,12 @@ class Simulator:
         self.max_acceleration = max_acceleration
         self.max_velocity = max_velocity
         self.agents: List[Agent] = []
-        self.setup_sim()
+        self.setup_sim(init_ps, goals)
 
-    def setup_sim(self) -> None:
-        init_ps, goals = random_init(self.n_agents, self.init_arena_range)
+    def setup_sim(self, init_ps: List[jnp.ndarray] = None, goals: List[jnp.ndarray] = None) -> None:
+        if init_ps is None or goals is None:
+            init_ps, goals = random_init(self.n_agents, self.init_arena_range)
+
         for i in range(self.n_agents):
             px, py = float(init_ps[i][0]), float(init_ps[i][1]) 
             x0 = jnp.array([px, py, 0, 0])
@@ -186,17 +194,20 @@ class Simulator:
             for i, agent in enumerate(self.agents):
                 agent.u_traj += self.dt * v_trajs[i]
         
-        # Apply only the FIRST control action and update real-world state
         for agent in self.agents:
-            # Apply first control action from optimized trajectory
-            u0 = agent.u_traj[0]  # First control action
-            
-            # Update state using dynamics (single step)
-            agent.x0 = agent.dyn_step(agent.x0, u0)[0]  # Get new state from RK4 integration
-            
-            # Store past trajectories for analysis
-            agent.past_x_traj.append(current_states[agent.id])  # Store previous state
-            agent.past_u_traj.append(u0)  # Store applied control
+            u0 = agent.u_traj[0]  
+            agent.x0 = agent.dyn_step(agent.x0, u0)[0]  
+            agent.past_x_traj.append(current_states[agent.id])  
+            agent.past_u_traj.append(u0)  
+
+            # calculate runtime loss for time step
+            other_x_trajs_list = [other_agent.x0 for other_agent in self.agents if other_agent.id != agent.id]
+            if len(other_x_trajs_list) == 0:
+                other_x_trajs = jnp.zeros((0, 4))
+            else:
+                other_x_trajs = jnp.stack(other_x_trajs_list, axis=0)
+            loss = agent.runtime_loss(agent.x0, u0, agent.get_ref_traj()[0], other_x_trajs)
+            agent.past_loss.append(float(loss))
         
         self.timestep += self.dt
     
@@ -207,16 +218,29 @@ class Simulator:
         # check convergence
         for agent in self.agents:
             print(f"Agent {agent.id}: final_distance_to_goal={jnp.linalg.norm(agent.x0[:2] - agent.goal):.3f}, converged={agent.check_convergence()}")
+    
+    def plot_results(self, gif_interval: int = 100) -> dict:
+        """
+        Create plots for the simulation results.
+        
+        Args:
+            timesteps: Number of timesteps for GIF (defaults to total_iters)
+            gif_interval: Animation interval in milliseconds
+            
+        Returns:
+            Dictionary with paths to created plot files
+        """
+        return plot_simulation_results(self, self.total_iters, gif_interval)
 
 if __name__ == "__main__":
     # Test the new receding horizon Nash game Simulator
     print("=== Testing Receding Horizon Nash Game Simulator ===")
     
     # Simulation parameters
-    N = 2  # Number of agents
+    N = 10  # Number of agents
     horizon = 20  # Optimization horizon (T steps)
     dt = 0.1  # Time step
-    init_arena_range = (-3.0, 3.0)  # Initial position range
+    init_arena_range = (-5.0, 5.0)  # Initial position range
     goal_threshold = 0.2  # Convergence threshold
     device = "cpu"
     max_acceleration = 2.0
@@ -231,6 +255,11 @@ if __name__ == "__main__":
     print(f"Cost weights - Q: {Q.diagonal()}, R: {R.diagonal()}")
     print()
 
+    # fixed goals
+    init_ps = [jnp.array([-2.0, 0.0]), jnp.array([2.0, 0.0])]
+    goals = [jnp.array([2.0, 0.0]), jnp.array([-2.0, 0.0])]
+    N = 2
+
     # Create simulator    
     simulator = Simulator(
         n_agents=N,
@@ -243,7 +272,9 @@ if __name__ == "__main__":
         max_acceleration=max_acceleration,
         max_velocity=max_velocity,
         goal_threshold=goal_threshold,
-        total_iters=total_iters
+        total_iters=total_iters,
+        init_ps=init_ps,
+        goals=goals
     )
 
     # Print initial conditions
@@ -254,4 +285,9 @@ if __name__ == "__main__":
 
     # Run simulation with progress updates
     print("Running simulation...")
-    simulator.run() 
+    simulator.run()
+    
+    # Create plots
+    print("\nCreating plots...")
+    plot_files = simulator.plot_results()
+    print(f"Plots saved to: {plot_files}") 
