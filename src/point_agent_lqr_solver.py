@@ -69,14 +69,11 @@ class Agent(iLQR):
     # define loss functions
     def runtime_loss(self, xt, ut, ref_xt, other_xts):
         collision_loss = 0.0
-        if other_xts.shape[0] > 0:  
-            # TODO: optimize this with JNP later in one operation
-            for other_xt in other_xts:
-                collision_loss += 0.2 * 1 / (jnp.linalg.norm(xt[:2] - other_xt[:2]) + 1e-6)
-            # normalize collision loss 
-            collision_loss /= other_xts.shape[0]
-            
-        ctrl_loss: jnp.ndarray = 0.01 * jnp.sum(jnp.square(ut))
+        for other_xt in other_xts:
+            collision_loss += 10.0 * jnp.exp(-5.0 * jnp.sum(jnp.square(xt[:2] - other_xt[:2])))
+        # normalize collision loss 
+        collision_loss /= other_xts.shape[0]
+        ctrl_loss: jnp.ndarray = 0.1 * jnp.sum(jnp.square(ut))
         nav_loss: jnp.ndarray = jnp.sum(jnp.square(xt[:2]-ref_xt[:2]))
         return nav_loss + collision_loss + ctrl_loss
 
@@ -173,7 +170,9 @@ class Simulator:
 
         for agent in self.agents:
             other_player_trajectories_list = self.get_other_player_trajectories(agent.id)
-            other_player_trajectories = jnp.stack(other_player_trajectories_list)
+            # transpose from (n,500,4) to (500,n,4) for broadcasting
+            stacked_other_player_trajectories = jnp.stack(other_player_trajectories_list)
+            other_player_trajectories = jnp.transpose(stacked_other_player_trajectories, (1, 0, 2))
             agent.a_traj, agent.b_traj = agent.jit_linearize_loss(agent.x_traj, 
                                                                   agent.u_traj,
                                                                   agent.ref_traj, 
