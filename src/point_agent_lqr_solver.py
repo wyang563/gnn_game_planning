@@ -3,9 +3,13 @@ import jax.numpy as jnp
 from jax import jit, vmap, grad
 from typing import Tuple, Optional, List, Dict, Any
 from lqrax import iLQR
-from utils.utils import random_init_collision
+from utils.utils import random_init_collision, load_config, parse_arguments
 from utils.point_agent_lqr_plots import LQRPlotter
 from tqdm import tqdm
+
+# Configure JAX to use float32 by default for better performance
+jax.config.update("jax_default_dtype_bits", "32")
+
 
 class Agent(iLQR):
     def __init__(
@@ -41,7 +45,7 @@ class Agent(iLQR):
         self.x0 = jax.device_put(x0, self.device)
         self.u_traj = jax.device_put(u_traj, self.device)
         self.goal = jax.device_put(goal, self.device)
-        self.ref_traj = self.get_ref_traj()
+        self.ref_traj = jax.device_put(self.get_ref_traj(), self.device)
         self.goal_threshold = goal_threshold
 
         # dynamics values
@@ -274,23 +278,33 @@ class Simulator:
             print(f"Agent {agent.id}, converged={agent.check_convergence()}")
 
 if __name__ == "__main__":
-    # Test the new receding horizon Nash game Simulator
-    print("=== Testing Receding Horizon Nash Game Simulator ===")
+    # Parse command line arguments
+    args = parse_arguments()
     
-    # Simulation parameters
-    N = 10  # Number of agents
-    horizon = 200  # Optimization horizon (T steps)
-    dt = 0.05  # Time step
-    init_arena_range = (-5.0, 5.0)  # Initial position range
-    goal_threshold = 0.2  # Convergence threshold
-    device = "cuda"
-    optimization_iters = 250  # Total simulation steps
-    step_size = 0.002
+    # Load configuration from YAML file
+    try:
+        config = load_config(args.config)
+        print(f"=== Testing Receding Horizon Nash Game Simulator ===")
+        print(f"Using config file: {args.config}")
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        exit(1)
+    
+    # Extract simulation parameters from config
+    simulator_config = config['simulator']
+    N = simulator_config['n_agents']  # Number of agents
+    horizon = simulator_config['horizon']  # Optimization horizon (T steps)
+    dt = simulator_config['dt']  # Time step
+    init_arena_range = tuple(simulator_config['init_arena_range'])  # Initial position range
+    goal_threshold = simulator_config['goal_threshold']  # Convergence threshold
+    device = simulator_config['device']
+    optimization_iters = simulator_config['optimization_iters']  # Total simulation steps
+    step_size = simulator_config['step_size']
 
     # Cost weights (position, velocity, control)
-    Q = jnp.diag(jnp.array([0.1, 0.1, 0.001, 0.001]))  # Higher position weights
-    R = jnp.diag(jnp.array([0.01, 0.01]))
-    W = jnp.array([100.0, 5.0, 0.1, 1.0]) # w1 = collision, w2 = collision cost exp decay, w3 = control, w4 = navigation
+    Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
+    R = jnp.diag(jnp.array(simulator_config['R']))
+    W = jnp.array(simulator_config['W'])  # w1 = collision, w2 = collision cost exp decay, w3 = control, w4 = navigation
 
     # Create simulator    
     simulator = Simulator(
@@ -327,5 +341,5 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=True, gif_interval=50)
+    plotter.plot_all(create_gif=False, gif_interval=50)
     

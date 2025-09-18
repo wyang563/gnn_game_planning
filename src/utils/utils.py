@@ -5,6 +5,8 @@ from lqrax import LQR
 import datetime
 import os
 import random
+import yaml
+import argparse
 
 def random_init_collision(n_agents: int, 
                 init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
@@ -92,3 +94,37 @@ def random_init_collision(n_agents: int,
         goals.append(goal)
     
     return init_ps, goals
+
+def load_config(config_path: str) -> Dict[str, Any]:
+    """
+    Load configuration from YAML file.
+    
+    Args:
+        config_path: Path to the YAML configuration file
+        
+    Returns:
+        Dictionary containing configuration values
+    """
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+    
+    return config
+
+def parse_arguments():
+    """
+    Parse command line arguments.
+    
+    Returns:
+        Parsed arguments containing config file path
+    """
+    parser = argparse.ArgumentParser(description='Run LQR-based multi-agent simulation')
+    parser.add_argument(
+        '--config', 
+        type=str, 
+        default='configs/point_agent_small.yaml',
+        help='Path to YAML configuration file (default: configs/point_agent_small.yaml)'
+    )
+    return parser.parse_args()
