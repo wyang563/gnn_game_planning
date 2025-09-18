@@ -6,7 +6,7 @@ import datetime
 import os
 import random
 
-def random_init(n_agents: int, 
+def random_init_collision(n_agents: int, 
                 init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
     init_ps = []
     goals = []
@@ -19,6 +19,7 @@ def random_init(n_agents: int,
     
     max_tries = 1000
     
+    # 1) Generate all initial positions with spacing
     for _ in range(n_agents):
         # Generate initial position
         init_pos = None
@@ -41,20 +42,53 @@ def random_init(n_agents: int,
                 break
         
         init_ps.append(init_pos)
-        
-        # Generate goal position (different from initial position)
-        goal = None
-        for _ in range(max_tries):
-            goal_x = random.uniform(min_pos, max_pos)
-            goal_y = random.uniform(min_pos, max_pos)
-            candidate_goal = jnp.array([goal_x, goal_y])
-            
-            # Ensure goal is far enough from initial position
-            distance_to_start = jnp.linalg.norm(candidate_goal - init_pos)
-            if distance_to_start > min_distance:
-                goal = candidate_goal
-                break
-        
+
+    # 2) For each agent, choose goal along the same line through origin: goal = -c * init
+    #    Pick c > 0 within bounds so that goal stays inside [min_pos, max_pos]^2
+    for i in range(n_agents):
+        x0, y0 = float(init_ps[i][0]), float(init_ps[i][1])
+
+        # Determine feasible interval for c such that goal = -c * init lies within bounds
+        c_lower = 0.0
+        c_upper = float('inf')
+
+        # x-dimension constraint
+        if x0 > 0:
+            # -c*x0 in [min_pos, max_pos] => c in [-max_pos/x0, -min_pos/x0]
+            c_lower = max(c_lower, -max_pos / x0)
+            c_upper = min(c_upper, -min_pos / x0)
+        elif x0 < 0:
+            # -c*x0 in [min_pos, max_pos] => c in [-min_pos/x0, -max_pos/x0]
+            c_lower = max(c_lower, -min_pos / x0)
+            c_upper = min(c_upper, -max_pos / x0)
+        # if x0 == 0, no constraint from x
+
+        # y-dimension constraint
+        if y0 > 0:
+            c_lower = max(c_lower, -max_pos / y0)
+            c_upper = min(c_upper, -min_pos / y0)
+        elif y0 < 0:
+            c_lower = max(c_lower, -min_pos / y0)
+            c_upper = min(c_upper, -max_pos / y0)
+        # if y0 == 0, no constraint from y
+
+        # Ensure positive and valid interval
+        c_lower = max(c_lower, 0.0)
+        if not (c_lower < c_upper and c_upper > 0):
+            # Fallback: if constraints degenerate, pick c = 1 and clip goal into bounds
+            c = 1.0
+            goal = -c * jnp.array([x0, y0])
+            goal = jnp.clip(goal, min_pos, max_pos)
+            goals.append(goal)
+            continue
+
+        # Prefer c around 1 with slight randomness, then clamp into [c_lower, c_upper]
+        desired_c = 1.0 + random.uniform(-0.2, 0.2)
+        # Keep a tiny margin inside bounds to avoid floating point boundary hits
+        margin = 1e-6
+        c = min(max(desired_c, c_lower + margin), c_upper - margin)
+
+        goal = -c * jnp.array([x0, y0])
         goals.append(goal)
     
     return init_ps, goals

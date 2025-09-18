@@ -38,405 +38,265 @@ class LQRPlotter:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.output_dir = f"outputs/{timestamp}"
         os.makedirs(self.output_dir, exist_ok=True)
+        self._update_agent_trajectories()
     
-    def create_trajectory_gif(self, 
-                            timesteps: int,
-                            interval: int = 100,
-                            filename: Optional[str] = None) -> str:
+    def _update_agent_trajectories(self):
+        """Update x_traj for all agents by calling calculate_x_traj."""
+        for agent in self.agents:
+            agent.x_traj = agent.calculate_x_traj()
+    
+    def _get_dynamic_bounds(self, padding: float = 0.1) -> Tuple[float, float, float, float]:
+        """Compute axis bounds that include all starts, goals, and trajectories.
+        Unifies these with provided arena_bounds and adds padding.
         """
-        Create an animated GIF showing agent trajectories over time.
+        xs = []
+        ys = []
+        for agent in self.agents:
+            # start
+            xs.append(float(agent.x0[0]))
+            ys.append(float(agent.x0[1]))
+            # goal
+            xs.append(float(agent.goal[0]))
+            ys.append(float(agent.goal[1]))
+            # trajectory, if available
+            if hasattr(agent, 'x_traj') and agent.x_traj is not None:
+                xs.extend(np.asarray(agent.x_traj[:, 0]).tolist())
+                ys.extend(np.asarray(agent.x_traj[:, 1]).tolist())
+        if not xs or not ys:
+            # fallback to provided bounds
+            return self.arena_bounds
+        x_min_data, x_max_data = min(xs), max(xs)
+        y_min_data, y_max_data = min(ys), max(ys)
+        # unify with provided arena bounds
+        x_min = min(x_min_data, self.arena_bounds[0])
+        x_max = max(x_max_data, self.arena_bounds[1])
+        y_min = min(y_min_data, self.arena_bounds[2])
+        y_max = max(y_max_data, self.arena_bounds[3])
+        # add padding
+        x_pad = (x_max - x_min) * padding if x_max > x_min else 1.0 * padding
+        y_pad = (y_max - y_min) * padding if y_max > y_min else 1.0 * padding
+        return (x_min - x_pad, x_max + x_pad, y_min - y_pad, y_max + y_pad)
+    
+    def plot_trajectories(self, save_path: Optional[str] = None):
+        """
+        Plot the trajectories of each agent from start to end with goal positions.
         
         Args:
-            timesteps: Number of timesteps to animate
-            interval: Animation interval in milliseconds
-            filename: Output filename (if None, auto-generates with timestamp)
-            
-        Returns:
-            Path to the created GIF file
+            save_path: Optional custom save path, defaults to output_dir
         """
-        if filename is None:
-            filename = "lqr_trajectory_animation.gif"
         
-        filepath = os.path.join(self.output_dir, filename)
-        
-        # Set up the figure and axis
         fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
         
-        # Initialize empty lines and points for each agent
-        lines = []
-        points = []
-        goal_points = []
+        for i, agent in enumerate(self.agents):
+            color = self.colors[i]
+            
+            # Extract x,y positions from trajectory
+            x_positions = agent.x_traj[:, 0]
+            y_positions = agent.x_traj[:, 1]
+            
+            # Plot trajectory
+            ax.plot(x_positions, y_positions, color=color, linewidth=2, 
+                   label=f'Agent {agent.id} trajectory', alpha=0.8)
+            
+            # Plot start position
+            ax.scatter(agent.x0[0], agent.x0[1], color=color, s=100, 
+                      marker='o', edgecolor='black', linewidth=2, 
+                      label=f'Agent {agent.id} start')
+            
+            # Plot goal position
+            ax.scatter(agent.goal[0], agent.goal[1], color=color, s=150, 
+                      marker='*', edgecolor='black', linewidth=2,
+                      label=f'Agent {agent.id} goal')
+        
+        bounds = self._get_dynamic_bounds(padding=0.08)
+        ax.set_xlim(bounds[0], bounds[1])
+        ax.set_ylim(bounds[2], bounds[3])
+        ax.set_xlabel('X Position')
+        ax.set_ylabel('Y Position')
+        ax.set_title('Agent Trajectories')
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.grid(True, alpha=0.3)
+        ax.set_aspect('equal', adjustable='box')
+        
+        plt.tight_layout()
+        
+        if save_path is None:
+            save_path = os.path.join(self.output_dir, 'lqr_trajectories.png')
+        plt.savefig(save_path, bbox_inches='tight')
+        plt.close()
+        print(f"Trajectories plot saved to: {save_path}")
+    
+    def plot_accelerations(self, save_path: Optional[str] = None):
+        """
+        Plot the magnitude of each agent's acceleration over time.
+        
+        Args:
+            save_path: Optional custom save path, defaults to output_dir
+        """
+        fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
         
         for i, agent in enumerate(self.agents):
-            # Trajectory line
-            line, = ax.plot([], [], color=self.colors[i], linewidth=2, 
-                          alpha=0.7, label=f'Agent {i} Trajectory')
+            color = self.colors[i]
+            
+            # Calculate acceleration magnitudes
+            u_x = agent.u_traj[:, 0]
+            u_y = agent.u_traj[:, 1]
+            acceleration_magnitudes = jnp.sqrt(u_x**2 + u_y**2)
+            
+            # Simulation step vector (0 to horizon)
+            simulation_steps = jnp.arange(len(acceleration_magnitudes))
+            
+            ax.plot(simulation_steps, acceleration_magnitudes, color=color, 
+                   linewidth=2, label=f'Agent {agent.id}')
+        
+        ax.set_xlabel('Simulation Step')
+        ax.set_ylabel('Acceleration Magnitude')
+        ax.set_title('Agent Accelerations Over Simulation Steps')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_path is None:
+            save_path = os.path.join(self.output_dir, 'lqr_accelerations.png')
+        plt.savefig(save_path, bbox_inches='tight')
+        plt.close()
+        print(f"Accelerations plot saved to: {save_path}")
+    
+    def plot_losses(self, save_path: Optional[str] = None):
+        """
+        Plot each agent's loss values over time.
+        
+        Args:
+            save_path: Optional custom save path, defaults to output_dir
+        """
+        fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
+        
+        for i, agent in enumerate(self.agents):
+            color = self.colors[i]
+            
+            # Simulation step vector based on loss history length
+            simulation_steps = jnp.arange(len(agent.loss_history))
+            
+            ax.plot(simulation_steps, agent.loss_history, color=color, 
+                   linewidth=2, label=f'Agent {agent.id}')
+        
+        ax.set_xlabel('Simulation Step')
+        ax.set_ylabel('Loss Value')
+        ax.set_title('Agent Loss Values Over Simulation Steps')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        # Removed log scale for linear visualization
+        
+        plt.tight_layout()
+        
+        if save_path is None:
+            save_path = os.path.join(self.output_dir, 'lqr_losses.png')
+        plt.savefig(save_path, bbox_inches='tight')
+        plt.close()
+        print(f"Losses plot saved to: {save_path}")
+    
+    def create_trajectory_gif(self, save_path: Optional[str] = None, 
+                            interval: int = 100):
+        """
+        Create an animated GIF showing agents moving toward their goals over time.
+        
+        Args:
+            save_path: Optional custom save path, defaults to output_dir
+            interval: Animation interval in milliseconds
+        """
+        
+        fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
+        
+        # Get maximum trajectory length
+        max_traj_len = max(len(agent.x_traj) for agent in self.agents)
+        
+        # Initialize plot elements
+        lines = []
+        points = []
+        goals = []
+        
+        for i, agent in enumerate(self.agents):
+            color = self.colors[i]
+            
+            # Trajectory line (will show entire current trajectory each frame)
+            line, = ax.plot([], [], color=color, linewidth=2, alpha=0.7,
+                           label=f'Agent {agent.id}')
             lines.append(line)
             
             # Current position point
-            point, = ax.plot([], [], 'o', color=self.colors[i], 
-                           markersize=8, markeredgecolor='black', 
-                           markeredgewidth=1, label=f'Agent {i}')
+            point, = ax.plot([], [], color=color, marker='o', markersize=8,
+                            markeredgecolor='black', markeredgewidth=1)
             points.append(point)
             
-            # Goal point
-            goal_point, = ax.plot([], [], 's', color=self.colors[i], 
-                                markersize=10, markeredgecolor='black', 
-                                markeredgewidth=2, alpha=0.8, label=f'Agent {i} Goal')
-            goal_points.append(goal_point)
+            # Goal position (static)
+            goal = ax.scatter(agent.goal[0], agent.goal[1], color=color, s=150,
+                             marker='*', edgecolor='black', linewidth=2,
+                             alpha=0.8)
+            goals.append(goal)
         
-        # Set up the plot
-        ax.set_xlim(self.arena_bounds[0], self.arena_bounds[1])
-        ax.set_ylim(self.arena_bounds[2], self.arena_bounds[3])
+        bounds = self._get_dynamic_bounds(padding=0.08)
+        ax.set_xlim(bounds[0], bounds[1])
+        ax.set_ylim(bounds[2], bounds[3])
         ax.set_xlabel('X Position')
         ax.set_ylabel('Y Position')
-        ax.set_title('Multi-Agent LQR Trajectory Animation')
+        ax.set_title('Agent Trajectories Animation')
+        ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        ax.set_aspect('equal')
+        ax.set_aspect('equal', adjustable='box')
         
         def animate(frame):
-            # Clear previous data
-            for line in lines:
-                line.set_data([], [])
-            for point in points:
-                point.set_data([], [])
-            
-            # Update data for each agent
             for i, agent in enumerate(self.agents):
-                if len(agent.past_x_traj) > 0:
-                    # Get trajectory data up to current frame
-                    trajectory_data = np.array(agent.past_x_traj[:min(frame + 1, len(agent.past_x_traj))])
-                    if len(trajectory_data) > 0:
-                        x_traj = trajectory_data[:, 0]
-                        y_traj = trajectory_data[:, 1]
-                        lines[i].set_data(x_traj, y_traj)
-                        
-                        # Current position
-                        current_pos = agent.past_x_traj[min(frame, len(agent.past_x_traj) - 1)]
-                        points[i].set_data([current_pos[0]], [current_pos[1]])
-                
-                # Goal position (static)
-                goal_pos = agent.goal
-                goal_points[i].set_data([goal_pos[0]], [goal_pos[1]])
+                if frame < len(agent.x_traj):
+                    # Update current position
+                    x_pos = agent.x_traj[frame, 0]
+                    y_pos = agent.x_traj[frame, 1]
+                    points[i].set_data([x_pos], [y_pos])
+                    
+                    # Show entire trajectory up to current frame
+                    x_trajectory = agent.x_traj[:frame+1, 0]
+                    y_trajectory = agent.x_traj[:frame+1, 1]
+                    lines[i].set_data(x_trajectory, y_trajectory)
+                else:
+                    # Keep final position if trajectory is shorter
+                    final_x = agent.x_traj[-1, 0]
+                    final_y = agent.x_traj[-1, 1]
+                    points[i].set_data([final_x], [final_y])
+                    lines[i].set_data(agent.x_traj[:, 0], agent.x_traj[:, 1])
             
-            # Update title with current timestep
-            ax.set_title(f'Multi-Agent LQR Trajectory Animation - Timestep {frame}')
-            
-            return lines + points + goal_points
+            return lines + points
         
         # Create animation
-        anim = animation.FuncAnimation(fig, animate, frames=timesteps, 
+        anim = animation.FuncAnimation(fig, animate, frames=max_traj_len,
                                      interval=interval, blit=True, repeat=True)
         
+        if save_path is None:
+            save_path = os.path.join(self.output_dir, 'lqr_trajectories.gif')
+        
         # Save as GIF
-        print(f"Creating trajectory GIF: {filepath}")
-        anim.save(filepath, writer='pillow', fps=10)
-        plt.close(fig)
-        
-        return filepath
+        anim.save(save_path, writer='pillow', fps=1000//interval)
+        plt.close()
+        print(f"Trajectory animation saved to: {save_path}")
     
-    def plot_trajectories(self, filename: Optional[str] = None) -> str:
+    def plot_all(self, create_gif: bool = False, gif_interval: int = 100):
         """
-        Create a static plot showing all agent trajectories.
+        Generate all plots and optionally the trajectory GIF.
         
         Args:
-            filename: Output filename (if None, auto-generates with timestamp)
-            
-        Returns:
-            Path to the created image file
+            create_gif: Whether to create the trajectory animation GIF
+            gif_interval: Animation interval for GIF in milliseconds
         """
-        if filename is None:
-            filename = "lqr_trajectories.png"
+        print(f"Generating plots in directory: {self.output_dir}")
         
-        filepath = os.path.join(self.output_dir, filename)
+        # Generate static plots
+        self.plot_trajectories()
+        self.plot_accelerations()
+        self.plot_losses()
         
-        # Set up the figure
-        fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
-        
-        # Plot trajectories for each agent
-        for i, agent in enumerate(self.agents):
-            if len(agent.past_x_traj) > 0:
-                trajectory_data = np.array(agent.past_x_traj)
-                x_traj = trajectory_data[:, 0]
-                y_traj = trajectory_data[:, 1]
-                
-                # Plot trajectory line
-                ax.plot(x_traj, y_traj, color=self.colors[i], linewidth=2, 
-                       alpha=0.7, label=f'Agent {i} Trajectory')
-                
-                # Mark start and end points
-                ax.plot(x_traj[0], y_traj[0], 'o', color=self.colors[i], 
-                       markersize=8, markeredgecolor='black', markeredgewidth=1,
-                       label=f'Agent {i} Start')
-                ax.plot(x_traj[-1], y_traj[-1], 's', color=self.colors[i], 
-                       markersize=8, markeredgecolor='black', markeredgewidth=1,
-                       label=f'Agent {i} End')
-                
-                # Plot goal
-                goal_pos = agent.goal
-                ax.plot(goal_pos[0], goal_pos[1], 'X', color=self.colors[i], 
-                       markersize=12, markeredgecolor='black', markeredgewidth=2,
-                       label=f'Agent {i} Goal')
-        
-        # Set up the plot
-        ax.set_xlim(self.arena_bounds[0], self.arena_bounds[1])
-        ax.set_ylim(self.arena_bounds[2], self.arena_bounds[3])
-        ax.set_xlabel('X Position')
-        ax.set_ylabel('Y Position')
-        ax.set_title('Multi-Agent LQR Trajectories')
-        ax.grid(True, alpha=0.3)
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        ax.set_aspect('equal')
-        
-        # Save the plot
-        print(f"Saving trajectory plot: {filepath}")
-        plt.tight_layout()
-        plt.savefig(filepath, dpi=self.dpi, bbox_inches='tight')
-        plt.close(fig)
-        
-        return filepath
-    
-    def plot_accelerations(self, filename: Optional[str] = None) -> str:
-        """
-        Create a plot showing acceleration of each agent over time.
-        
-        Args:
-            filename: Output filename (if None, auto-generates with timestamp)
-            
-        Returns:
-            Path to the created image file
-        """
-        if filename is None:
-            filename = "lqr_accelerations.png"
-        
-        filepath = os.path.join(self.output_dir, filename)
-        
-        # Set up the figure
-        fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
-        
-        # Calculate accelerations for each agent
-        for i, agent in enumerate(self.agents):
-            if len(agent.past_u_traj) > 0:
-                # Control inputs are accelerations in this case
-                control_data = np.array(agent.past_u_traj)
-                time_steps = np.arange(len(control_data))
-                
-                # Plot acceleration components
-                ax.plot(time_steps, control_data[:, 0], color=self.colors[i], 
-                       linewidth=2, linestyle='-', alpha=0.8, 
-                       label=f'Agent {i} - X Acceleration')
-                ax.plot(time_steps, control_data[:, 1], color=self.colors[i], 
-                       linewidth=2, linestyle='--', alpha=0.8, 
-                       label=f'Agent {i} - Y Acceleration')
-        
-        # Set up the plot
-        ax.set_xlabel('Time Step')
-        ax.set_ylabel('Acceleration')
-        ax.set_title('Multi-Agent LQR Accelerations Over Time')
-        ax.grid(True, alpha=0.3)
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        
-        # Save the plot
-        print(f"Saving acceleration plot: {filepath}")
-        plt.tight_layout()
-        plt.savefig(filepath, dpi=self.dpi, bbox_inches='tight')
-        plt.close(fig)
-        
-        return filepath
-    
-    def plot_losses(self, filename: Optional[str] = None) -> str:
-        """
-        Create a plot showing loss values for each agent over time.
-        
-        Args:
-            filename: Output filename (if None, auto-generates with timestamp)
-            
-        Returns:
-            Path to the created image file
-        """
-        if filename is None:
-            filename = "lqr_losses.png"
-        
-        filepath = os.path.join(self.output_dir, filename)
-        
-        # Set up the figure
-        fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
-        
-        # Plot losses for each agent
-        for i, agent in enumerate(self.agents):
-            if len(agent.past_loss) > 0:
-                loss_data = np.array(agent.past_loss)
-                time_steps = np.arange(len(loss_data))
-                
-                # Plot loss curve
-                ax.plot(time_steps, loss_data, color=self.colors[i], 
-                       linewidth=2, alpha=0.8, label=f'Agent {i}')
-        
-        # Set up the plot
-        ax.set_xlabel('Time Step')
-        ax.set_ylabel('Loss Value')
-        ax.set_title('Multi-Agent LQR Loss Values Over Time')
-        ax.grid(True, alpha=0.3)
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        
-        # Use log scale for y-axis if losses vary widely
-        if len(self.agents) > 0 and len(self.agents[0].past_loss) > 0:
-            all_losses = np.concatenate([agent.past_loss for agent in self.agents if len(agent.past_loss) > 0])
-            if np.max(all_losses) / np.min(all_losses[all_losses > 0]) > 10:  # If range is large
-                ax.set_yscale('log')
-        
-        # Save the plot
-        print(f"Saving loss plot: {filepath}")
-        plt.tight_layout()
-        plt.savefig(filepath, dpi=self.dpi, bbox_inches='tight')
-        plt.close(fig)
-        
-        return filepath
-    
-    def export_data_json(self, filename: Optional[str] = None) -> str:
-        """
-        Export agent data (positions and accelerations) to JSON file.
-        
-        Args:
-            filename: Output filename (if None, auto-generates with timestamp)
-            
-        Returns:
-            Path to the created JSON file
-        """
-        if filename is None:
-            filename = "simulation_data.json"
-        
-        filepath = os.path.join(self.output_dir, filename)
-        
-        # Prepare data structure
-        data = {}
-        
-        for i, agent in enumerate(self.agents):
-            agent_data = {
-                "agent_id": int(agent.id),
-                "initial_position": {
-                    "x": float(agent.past_x_traj[0][0]) if len(agent.past_x_traj) > 0 else 0.0,
-                    "y": float(agent.past_x_traj[0][1]) if len(agent.past_x_traj) > 0 else 0.0
-                },
-                "goal_position": {
-                    "x": float(agent.goal[0]),
-                    "y": float(agent.goal[1])
-                },
-                "final_position": {
-                    "x": float(agent.x0[0]),
-                    "y": float(agent.x0[1])
-                },
-                "converged": bool(agent.check_convergence()),
-                "trajectory": [],
-                "accelerations": []
-            }
-            
-            # Add trajectory data (positions over time)
-            for t, state in enumerate(agent.past_x_traj):
-                trajectory_point = {
-                    "timestep": t,
-                    "position": {
-                        "x": float(state[0]),
-                        "y": float(state[1])
-                    },
-                    "velocity": {
-                        "x": float(state[2]),
-                        "y": float(state[3])
-                    }
-                }
-                agent_data["trajectory"].append(trajectory_point)
-            
-            # Add acceleration data (control inputs over time)
-            for t, control in enumerate(agent.past_u_traj):
-                acceleration_point = {
-                    "timestep": t,
-                    "acceleration": {
-                        "x": float(control[0]),
-                        "y": float(control[1])
-                    }
-                }
-                agent_data["accelerations"].append(acceleration_point)
-            
-            data[f"agent_{i}"] = agent_data
-        
-        # Add simulation metadata
-        data["simulation_metadata"] = {
-            "total_agents": self.n_agents,
-            "total_timesteps": len(self.agents[0].past_x_traj) if self.n_agents > 0 and len(self.agents[0].past_x_traj) > 0 else 0,
-            "converged_agents": sum(1 for agent in self.agents if agent.check_convergence()),
-            "export_timestamp": datetime.now().isoformat()
-        }
-        
-        # Save JSON file
-        print(f"Exporting simulation data: {filepath}")
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=2)
-        
-        return filepath
-    
-    def plot_all(self, timesteps: int = 50, gif_interval: int = 100, create_gif: bool = True) -> dict:
-        """
-        Create all plots and export data.
-        
-        Args:
-            timesteps: Number of timesteps for the GIF animation
-            gif_interval: Animation interval in milliseconds
-            create_gif: Whether to create the trajectory GIF animation
-            
-        Returns:
-            Dictionary with paths to all created files
-        """
-        results = {}
-        
-        # Create trajectory GIF (optional)
+        # Optionally generate GIF
         if create_gif:
-            results['gif'] = self.create_trajectory_gif(timesteps, gif_interval)
-        else:
-            results['gif'] = None
+            print("Creating trajectory animation...")
+            self.create_trajectory_gif(interval=gif_interval)
         
-        # Create static trajectory plot
-        results['trajectories'] = self.plot_trajectories()
-        
-        # Create acceleration plot
-        results['accelerations'] = self.plot_accelerations()
-        
-        # Create loss plot
-        results['losses'] = self.plot_losses()
-        
-        # Export data to JSON
-        results['data_json'] = self.export_data_json()
-        
-        print(f"\nAll plots and data export completed successfully!")
-        if create_gif:
-            print(f"GIF: {results['gif']}")
-        print(f"Trajectories: {results['trajectories']}")
-        print(f"Accelerations: {results['accelerations']}")
-        print(f"Losses: {results['losses']}")
-        print(f"Data JSON: {results['data_json']}")
-        
-        return results
-
-
-def plot_simulation_results(simulator, timesteps: int = 50, gif_interval: int = 100, create_gif: bool = True) -> dict:
-    """
-    Convenience function to plot results from a Simulator object.
+        print("All plots generated successfully!")
     
-    Args:
-        simulator: Simulator object with agents
-        timesteps: Number of timesteps for the GIF animation
-        gif_interval: Animation interval in milliseconds
-        create_gif: Whether to create the trajectory GIF animation
-        
-    Returns:
-        Dictionary with paths to all created files
-    """
-    plotter = LQRPlotter(simulator.agents)
-    return plotter.plot_all(timesteps, gif_interval, create_gif)
-
-
-if __name__ == "__main__":
-    # Example usage
-    print("LQR Plotting Utilities")
-    print("This module provides plotting functions for LQR multi-agent simulations.")
-    print("Use plot_simulation_results(simulator) to create all plots from a simulator object.")
