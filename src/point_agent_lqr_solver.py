@@ -78,8 +78,8 @@ class Agent(iLQR):
         return nav_loss + collision_loss + ctrl_loss
 
     def loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs):
-        per_t = vmap(self.runtime_loss, in_axes=(0, 0, 0, 0))
-        return per_t(x_traj, u_traj, ref_x_traj, other_x_trajs).sum() * self.dt
+        runtime_loss_array = vmap(self.runtime_loss, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs)
+        return runtime_loss_array.sum() * self.dt
 
     def linearize_loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs):
         dldx = grad(self.runtime_loss, argnums=(0))
@@ -89,11 +89,20 @@ class Agent(iLQR):
         return a_traj, b_traj
 
     # helpers
+    def debug_agent(self):
+        print(f"Agent {self.id}:")
+        print(f"  x0={self.x0}")
+        print(f"  goal={self.goal}")
+        print(f"  ref_traj={self.ref_traj}")
+        print(f"  x_traj={self.x_traj}")
+        print(f"  u_traj={self.u_traj}")
+
     def get_ref_traj(self):
-        return jnp.linspace(self.x0[:2], self.goal, self.total_iters+1)[1:]
+        return jnp.linspace(self.x0[:2], self.goal, self.horizon+1)[1:]
     
     def check_convergence(self) -> bool:
-        return jnp.linalg.norm(self.x0[:2] - self.goal) < self.goal_threshold
+        final_x_pos = self.jit_linearize_dyn(self.x0, self.u_traj)[0][-1, :2]
+        return jnp.linalg.norm(final_x_pos - self.goal) < self.goal_threshold
 
 class Simulator:
     def __init__(
@@ -138,7 +147,7 @@ class Simulator:
         for i in range(self.n_agents):
             px, py = float(init_ps[i][0]), float(init_ps[i][1]) 
             x0 = jnp.array([px, py, -0.8, 0.0])
-            u_traj = jnp.zeros((self.total_iters, 2))
+            u_traj = jnp.zeros((self.horizon, 2))
             goal_i = goals[i]
 
             agent = Agent(
@@ -183,6 +192,9 @@ class Simulator:
         if int(self.timestep / self.dt) % int(self.total_iters/10) == 0:
             loss_str = f"iter[{int(self.timestep / self.dt)}/{self.total_iters}] | "
             for agent in self.agents:
+                other_player_trajectories_list = self.get_other_player_trajectories(agent.id)
+                stacked_other_player_trajectories = jnp.stack(other_player_trajectories_list)
+                other_player_trajectories = jnp.transpose(stacked_other_player_trajectories, (1, 0, 2))
                 agent_loss = agent.jit_loss(agent.x_traj, agent.u_traj, agent.ref_traj, other_player_trajectories)
                 loss_str += f"Agent {agent.id}: {agent_loss:.3f} | "
             # print losses
@@ -220,8 +232,8 @@ if __name__ == "__main__":
     
     # Simulation parameters
     N = 10  # Number of agents
-    horizon = 50  # Optimization horizon (T steps)
-    dt = 0.1  # Time step
+    horizon = 100  # Optimization horizon (T steps)
+    dt = 0.05  # Time step
     init_arena_range = (-5.0, 5.0)  # Initial position range
     goal_threshold = 0.1  # Convergence threshold
     device = "cpu"
@@ -235,8 +247,8 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array([0.01, 0.01]))
 
     # TODO: remove these laterfixed goals
-    init_ps = [jnp.array([-2.0, 0.0]), jnp.array([2.0, 0.0])]
-    goals = [jnp.array([2.0, 0.0]), jnp.array([-2.0, 0.0])]
+    init_ps = [jnp.array([-2.0, 0.01]), jnp.array([2.0, 0.0])]
+    goals = [jnp.array([2.0, -0.01]), jnp.array([-2.0, 0.0])]
     N = 2
 
     # Create simulator    
