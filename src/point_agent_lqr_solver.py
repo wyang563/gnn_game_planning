@@ -47,14 +47,12 @@ class Agent(iLQR):
         self.goal = jax.device_put(goal, self.device)
         self.ref_traj = jax.device_put(self.get_ref_traj(), self.device)
         self.goal_threshold = goal_threshold
-
-        # dynamics values
         self.x_traj: Optional[jnp.ndarray] = None  
-        self.A_traj: Optional[jnp.ndarray] = None 
-        self.B_traj: Optional[jnp.ndarray] = None
-        self.a_traj: Optional[jnp.ndarray] = None
-        self.b_traj: Optional[jnp.ndarray] = None
-        self.v_traj: Optional[jnp.ndarray] = None
+        # self.A_traj: Optional[jnp.ndarray] = None 
+        # self.B_traj: Optional[jnp.ndarray] = None
+        # self.a_traj: Optional[jnp.ndarray] = None
+        # self.b_traj: Optional[jnp.ndarray] = None
+        # self.v_traj: Optional[jnp.ndarray] = None
 
         # values for logging
         self.loss_history: List[float] = []
@@ -174,6 +172,18 @@ class Simulator:
             )
 
             self.agents.append(agent)
+        
+        # setup batched dynamics matrices for all agents
+        self.x0s = jnp.stack([agent.x0 for agent in self.agents])
+        self.u_trajs = jnp.stack([agent.u_traj for agent in self.agents])
+        self.ref_trajs = jnp.stack([agent.ref_traj for agent in self.agents])
+        
+        all_idx = jnp.arange(self.n_agents)
+        self.other_index = jnp.stack([
+            jnp.concatenate([all_idx[:i], all_idx[i+1:]])
+            for i in range(self.n_agents)
+        ])
+        self.all_loss_vals = []
     
     def _setup_batched_functions(self):
         """Setup batched jitted functions for better GPU utilization."""
@@ -211,54 +221,25 @@ class Simulator:
         self.jit_batched_solve = jit(batched_solve, device=self.device)
         self.jit_batched_loss = jit(batched_loss, device=self.device)
     
-    def get_other_player_trajectories(self, agentId: int) -> List[jnp.ndarray]:
-        return [agent.x_traj[:, :2] for agent in self.agents if agent.id != agentId]
-
     def step(self) -> None:
-        # Prepare batched inputs for all agents
-        x0s = jnp.stack([agent.x0 for agent in self.agents])
-        u_trajs = jnp.stack([agent.u_traj for agent in self.agents])
-        ref_trajs = jnp.stack([agent.ref_traj for agent in self.agents])
-        
         # Step 1: Batched linearize dynamics for all agents
-        x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(x0s, u_trajs)
-        
-        # Update agent trajectories
-        for i, agent in enumerate(self.agents):
-            agent.x_traj = x_trajs[i]
-            agent.A_traj = A_trajs[i]
-            agent.B_traj = B_trajs[i]
+        x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
         
         # Step 2: Prepare other player trajectories for each agent
         # Create a 3D array where other_trajs[i] contains trajectories of all other agents for agent i
-        other_trajs_list = []
-        for i in range(self.n_agents):
-            other_agent_trajs = [self.agents[j].x_traj[:, :2] for j in range(self.n_agents) if j != i]
-            if other_agent_trajs:
-                stacked_other = jnp.stack(other_agent_trajs)
-                other_trajs = jnp.transpose(stacked_other, (1, 0, 2))  # (horizon, n_others, 2)
-            else:
-                # If no other agents, create empty array with correct shape
-                other_trajs = jnp.zeros((self.horizon, 0, 2))
-            other_trajs_list.append(other_trajs)
-        
-        other_trajs_batch = jnp.stack(other_trajs_list)
+        all_x_pos = x_trajs[:, :, :2]
+        other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
+        other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
         
         # Step 3: Batched linearize loss and solve for all agents
-        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, u_trajs, ref_trajs, other_trajs_batch)
-        loss_vals = self.jit_batched_loss(x_trajs, u_trajs, ref_trajs, other_trajs_batch)
+        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
+        loss_vals = self.jit_batched_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
+        self.all_loss_vals.append(loss_vals)
         v_trajs, _ = self.jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
         
-        # Update agent states
-        for i, agent in enumerate(self.agents):
-            agent.a_traj = a_trajs[i]
-            agent.b_traj = b_trajs[i]
-            agent.loss_history.append(loss_vals[i])
-            agent.v_traj = v_trajs[i]
-        
+        # calculate min pairwise distance of each agent 
         # Step 4: Update control trajectories
-        for i, agent in enumerate(self.agents):
-            agent.u_traj += self.step_size * v_trajs[i]
+        self.u_trajs += self.step_size * v_trajs
         
         # Print logging for loss values
         if int(self.timestep / self.dt) % int(self.optimization_iters/10) == 0:
@@ -273,6 +254,11 @@ class Simulator:
         for _ in tqdm(range(self.optimization_iters)):
             self.step()
         
+        # calculate x_traj/u_traj for all agents based off batched values in simulator
+        for i, agent in enumerate(self.agents):
+            agent.u_traj = self.u_trajs[i, :, :]
+            agent.x_traj = agent.calculate_x_traj()
+
         # check convergence
         for agent in self.agents:
             print(f"Agent {agent.id}, converged={agent.check_convergence()}")
@@ -341,5 +327,5 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=False, gif_interval=50, dump_data=True, simulator=simulator)
+    plotter.plot_all(create_gif=True, gif_interval=50, dump_data=True, simulator=simulator)
     

@@ -163,27 +163,50 @@ class LQRPlotter:
         plt.close()
         print(f"Accelerations plot saved to: {save_path}")
     
-    def plot_losses(self, save_path: Optional[str] = None):
+    def plot_losses(self, simulator=None, save_path: Optional[str] = None):
         """
-        Plot each agent's loss values over time.
+        Plot each agent's loss values over time using all_loss_vals from simulator.
         
         Args:
+            simulator: Simulator object containing all_loss_vals data
             save_path: Optional custom save path, defaults to output_dir
         """
         fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
         
-        for i, agent in enumerate(self.agents):
-            color = self.colors[i]
+        if simulator is not None and hasattr(simulator, 'all_loss_vals') and simulator.all_loss_vals:
+            # Use all_loss_vals from simulator
+            all_loss_vals = simulator.all_loss_vals
+            n_iterations = len(all_loss_vals)
             
-            # Simulation step vector based on loss history length
-            simulation_steps = jnp.arange(len(agent.loss_history))
+            # Convert to numpy array for easier indexing: shape (n_iterations, n_agents)
+            loss_matrix = np.array([np.asarray(loss_vals) for loss_vals in all_loss_vals])
             
-            ax.plot(simulation_steps, agent.loss_history, color=color, 
-                   linewidth=2, label=f'Agent {agent.id}')
+            for i, agent in enumerate(self.agents):
+                color = self.colors[i]
+                
+                # Extract loss values for this agent across all iterations
+                agent_losses = loss_matrix[:, i]
+                
+                # Simulation step vector based on number of iterations
+                simulation_steps = np.arange(n_iterations)
+                
+                ax.plot(simulation_steps, agent_losses, color=color, 
+                       linewidth=2, label=f'Agent {agent.id}')
+        else:
+            # Fallback to individual agent loss histories if simulator data not available
+            print("Warning: Using individual agent loss histories as fallback")
+            for i, agent in enumerate(self.agents):
+                color = self.colors[i]
+                
+                # Simulation step vector based on loss history length
+                simulation_steps = jnp.arange(len(agent.loss_history))
+                
+                ax.plot(simulation_steps, agent.loss_history, color=color, 
+                       linewidth=2, label=f'Agent {agent.id}')
         
-        ax.set_xlabel('Simulation Step')
+        ax.set_xlabel('Optimization Iteration')
         ax.set_ylabel('Loss Value')
-        ax.set_title('Agent Loss Values Over Simulation Steps')
+        ax.set_title('Agent Loss Values Over Optimization Iterations')
         ax.legend()
         ax.grid(True, alpha=0.3)
         # Removed log scale for linear visualization
@@ -388,7 +411,7 @@ class LQRPlotter:
         # Generate static plots
         self.plot_trajectories()
         self.plot_accelerations()
-        self.plot_losses()
+        self.plot_losses(simulator=simulator)
         
         # Optionally generate GIF
         if create_gif:
