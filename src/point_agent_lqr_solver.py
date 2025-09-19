@@ -184,6 +184,7 @@ class Simulator:
             for i in range(self.n_agents)
         ])
         self.all_loss_vals = []
+        self.all_min_pairwise_distances = []
     
     def _setup_batched_functions(self):
         """Setup batched jitted functions for better GPU utilization."""
@@ -221,6 +222,17 @@ class Simulator:
         self.jit_batched_solve = jit(batched_solve, device=self.device)
         self.jit_batched_loss = jit(batched_loss, device=self.device)
     
+    def global_min_pairwise_distance(self, all_x_pos: jnp.ndarray) -> jnp.ndarray:
+        N = all_x_pos.shape[0]
+        X = jnp.swapaxes(all_x_pos, 0, 1)  
+        d2 = jnp.sum((X[:, :, None, :] - X[:, None, :, :]) ** 2, axis=-1)
+
+        mask = ~jnp.eye(N, dtype=bool)            
+        masked_d2 = jnp.where(mask, d2, jnp.inf)  
+
+        min_d2 = jnp.min(masked_d2)               
+        return jnp.sqrt(min_d2)
+
     def step(self) -> None:
         # Step 1: Batched linearize dynamics for all agents
         x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
@@ -230,7 +242,10 @@ class Simulator:
         all_x_pos = x_trajs[:, :, :2]
         other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
         other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
-        
+
+        min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos)
+        self.all_min_pairwise_distances.append(min_pairwise_distance)
+
         # Step 3: Batched linearize loss and solve for all agents
         a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
         loss_vals = self.jit_batched_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
@@ -327,5 +342,5 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=True, gif_interval=50, dump_data=True, simulator=simulator)
+    plotter.plot_all(create_gif=False, gif_interval=50, dump_data=False, simulator=simulator)
     

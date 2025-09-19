@@ -219,6 +219,66 @@ class LQRPlotter:
         plt.close()
         print(f"Losses plot saved to: {save_path}")
     
+    def plot_min_pairwise_distance(self, simulator=None, save_path: Optional[str] = None):
+        """
+        Plot the minimum pairwise distance between agents over optimization iterations.
+        
+        Args:
+            simulator: Simulator object containing all_min_pairwise_distances data
+            save_path: Optional custom save path, defaults to output_dir
+        """
+        fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
+        
+        if simulator is not None and hasattr(simulator, 'all_min_pairwise_distances') and simulator.all_min_pairwise_distances:
+            # Use all_min_pairwise_distances from simulator
+            min_distances = simulator.all_min_pairwise_distances
+            n_iterations = len(min_distances)
+            
+            # Convert to numpy array for easier plotting
+            min_distances_array = np.array([np.asarray(dist) for dist in min_distances])
+            
+            # Optimization iteration vector
+            optimization_steps = np.arange(n_iterations)
+            
+            # Plot minimum pairwise distance over time
+            ax.plot(optimization_steps, min_distances_array, color='red', 
+                   linewidth=2, label='Min Pairwise Distance')
+            
+            # Add a horizontal line at a reasonable collision threshold (e.g., 0.5)
+            collision_threshold = 0.5
+            ax.axhline(y=collision_threshold, color='orange', linestyle='--', 
+                      alpha=0.7, label=f'Collision Threshold ({collision_threshold})')
+            
+            # Highlight regions where agents are very close
+            close_mask = min_distances_array < collision_threshold
+            if np.any(close_mask):
+                ax.fill_between(optimization_steps, 0, min_distances_array, 
+                               where=close_mask, alpha=0.3, color='red', 
+                               label='Close Proximity Region')
+        else:
+            # Fallback message if simulator data not available
+            ax.text(0.5, 0.5, 'No minimum pairwise distance data available', 
+                   transform=ax.transAxes, ha='center', va='center', fontsize=12)
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+        
+        ax.set_xlabel('Optimization Iteration')
+        ax.set_ylabel('Minimum Pairwise Distance')
+        ax.set_title('Minimum Pairwise Distance Between Agents Over Time')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Set y-axis to start from 0 for better visualization
+        ax.set_ylim(bottom=0)
+        
+        plt.tight_layout()
+        
+        if save_path is None:
+            save_path = os.path.join(self.output_dir, 'lqr_min_pairwise_distance.png')
+        plt.savefig(save_path, bbox_inches='tight')
+        plt.close()
+        print(f"Min pairwise distance plot saved to: {save_path}")
+    
     def create_trajectory_gif(self, save_path: Optional[str] = None, 
                             interval: int = 100):
         """
@@ -412,6 +472,7 @@ class LQRPlotter:
         self.plot_trajectories()
         self.plot_accelerations()
         self.plot_losses(simulator=simulator)
+        self.plot_min_pairwise_distance(simulator=simulator)
         
         # Optionally generate GIF
         if create_gif:

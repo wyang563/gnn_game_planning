@@ -19,3 +19,5 @@ example_files
 *.svg
 *.ico
 *.pdf
+*.vscode
+*.pytest_cache
