@@ -341,5 +341,5 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=False, gif_interval=50)
+    plotter.plot_all(create_gif=False, gif_interval=50, dump_data=True, simulator=simulator)
     

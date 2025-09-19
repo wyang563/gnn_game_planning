@@ -300,3 +300,107 @@ class LQRPlotter:
         
         print("All plots generated successfully!")
     
+    def dump_simulation_data(self, simulator, save_path: Optional[str] = None):
+        """
+        Dump simulation data to JSON file with metadata and agent trajectories.
+        
+        Args:
+            simulator: Simulator object containing agents and simulation parameters
+            save_path: Optional custom save path, defaults to output_dir
+        """
+        if save_path is None:
+            save_path = os.path.join(self.output_dir, 'simulation_data.json')
+        
+        # Prepare metadata
+        metadata = {
+            "simulation_info": {
+                "timestamp": datetime.now().isoformat(),
+                "n_agents": int(simulator.n_agents),
+                "horizon": int(simulator.horizon),
+                "dt": float(simulator.dt),
+                "optimization_iters": int(simulator.optimization_iters),
+                "step_size": float(simulator.step_size),
+                "goal_threshold": float(simulator.goal_threshold),
+                "init_arena_range": [float(x) for x in simulator.init_arena_range],
+                "device": str(simulator.device)
+            },
+            "cost_parameters": {
+                "Q": [float(x) for x in np.diag(simulator.Q)],
+                "R": [float(x) for x in np.diag(simulator.R)],
+                "W": [float(x) for x in np.asarray(simulator.W)]
+            }
+        }
+        
+        # Prepare agent data
+        agents_data = {}
+        
+        for agent in self.agents:
+            # Convert JAX arrays to regular numpy arrays and then to lists
+            x_traj = np.asarray(agent.x_traj).tolist()
+            u_traj = np.asarray(agent.u_traj).tolist()
+            
+            # Convert loss history to regular Python floats
+            loss_history = [float(loss) for loss in agent.loss_history]
+            
+            # Prepare timestep data
+            timestep_data = {}
+            for t in range(len(x_traj)):
+                timestep_data[str(t)] = {
+                    "x_traj": x_traj[t],
+                    "u_traj": u_traj[t],
+                    "loss": loss_history[t] if t < len(loss_history) else None
+                }
+            
+            agents_data[f"agent_{agent.id}"] = {
+                "agent_info": {
+                    "id": agent.id,
+                    "x0": [float(x) for x in np.asarray(agent.x0)],
+                    "goal": [float(x) for x in np.asarray(agent.goal)],
+                    "converged": bool(agent.check_convergence())
+                },
+                "timesteps": timestep_data
+            }
+        
+        # Combine metadata and agent data
+        simulation_data = {
+            "metadata": metadata,
+            "agents": agents_data
+        }
+        
+        # Save to JSON file
+        with open(save_path, 'w') as f:
+            json.dump(simulation_data, f, indent=2)
+        
+        print(f"Simulation data saved to: {save_path}")
+    
+    def plot_all(self, create_gif: bool = False, gif_interval: int = 100, dump_data: bool = True, simulator=None):
+        """
+        Generate all plots and optionally the trajectory GIF and simulation data dump.
+        
+        Args:
+            create_gif: Whether to create the trajectory animation GIF
+            gif_interval: Animation interval for GIF in milliseconds
+            dump_data: Whether to dump simulation data to JSON
+            simulator: Simulator object (required if dump_data=True)
+        """
+        print(f"Generating plots in directory: {self.output_dir}")
+        
+        # Generate static plots
+        self.plot_trajectories()
+        self.plot_accelerations()
+        self.plot_losses()
+        
+        # Optionally generate GIF
+        if create_gif:
+            print("Creating trajectory animation...")
+            self.create_trajectory_gif(interval=gif_interval)
+        
+        # Optionally dump simulation data
+        if dump_data and simulator is not None:
+            print("Dumping simulation data to JSON...")
+            self.dump_simulation_data(simulator)
+        elif dump_data and simulator is None:
+            print("Warning: dump_data=True but no simulator provided. Skipping data dump.")
+        
+        print("All plots generated successfully!")
+    

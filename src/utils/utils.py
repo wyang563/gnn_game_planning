@@ -124,7 +124,7 @@ def parse_arguments():
     parser.add_argument(
         '--config', 
         type=str, 
-        default='configs/point_agent_small.yaml',
+        default=None,
         help='Path to YAML configuration file (default: configs/point_agent_small.yaml)'
     )
     return parser.parse_args()

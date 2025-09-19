@@ -1,5 +1,5 @@
 simulator:
-  n_agents: 3
+  n_agents: 6
   horizon: 200
   dt: 0.05
   init_arena_range: [-5.0, 5.0]
