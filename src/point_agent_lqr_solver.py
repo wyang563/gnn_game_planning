@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from jax import jit, vmap, grad
 from typing import Tuple, Optional, List, Dict, Any
 from lqrax import iLQR
-from utils.utils import random_init_collision, load_config, parse_arguments
+from utils.utils import origin_init_collision, random_init, load_config, parse_arguments
 from utils.point_agent_lqr_plots import LQRPlotter
 from tqdm import tqdm
 
@@ -124,6 +124,7 @@ class Simulator:
         step_size: float = 0.002,
         init_ps: List[jnp.ndarray] = None,
         goals: List[jnp.ndarray] = None,
+        init_type: str = "random",
     ) -> None: 
 
         self.n_agents = n_agents
@@ -140,14 +141,16 @@ class Simulator:
         self.optimization_iters = optimization_iters 
         self.step_size = step_size
         self.agents: List[Agent] = []
-        self.setup_sim(init_ps, goals)
+        self.setup_sim(init_ps, goals, init_type)
         
         # Create batched jitted functions for better GPU utilization
         self._setup_batched_functions()
 
-    def setup_sim(self, init_ps: List[jnp.ndarray] = None, goals: List[jnp.ndarray] = None) -> None:
-        if init_ps is None or goals is None:
-            init_ps, goals = random_init_collision(self.n_agents, self.init_arena_range)
+    def setup_sim(self, init_ps: List[jnp.ndarray] = None, goals: List[jnp.ndarray] = None, init_type: str = "random") -> None:
+        if init_type == "origin":
+            init_ps, goals = origin_init_collision(self.n_agents, self.init_arena_range)
+        elif init_type == "random":
+            init_ps, goals = random_init(self.n_agents, self.init_arena_range)
 
         for i in range(self.n_agents):
             px, py = float(init_ps[i][0]), float(init_ps[i][1]) 
@@ -301,6 +304,7 @@ if __name__ == "__main__":
     device = simulator_config['device']
     optimization_iters = simulator_config['optimization_iters']  # Total simulation steps
     step_size = simulator_config['step_size']
+    init_type = simulator_config['init_type']
 
     # Cost weights (position, velocity, control)
     Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
@@ -320,6 +324,7 @@ if __name__ == "__main__":
         step_size=step_size,
         goal_threshold=goal_threshold,
         optimization_iters=optimization_iters,
+        init_type=init_type,
     )
 
     # Print initial conditions
@@ -342,5 +347,5 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=False, gif_interval=50, dump_data=False, simulator=simulator)
+    plotter.plot_all(create_gif=True, gif_interval=50, dump_data=False, simulator=simulator)
     

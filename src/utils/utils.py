@@ -8,7 +8,7 @@ import random
 import yaml
 import argparse
 
-def random_init_collision(n_agents: int, 
+def origin_init_collision(n_agents: int, 
                 init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
     init_ps = []
     goals = []
@@ -112,6 +112,85 @@ def load_config(config_path: str) -> Dict[str, Any]:
         config = yaml.safe_load(file)
     
     return config
+
+def random_init(n_agents: int, 
+                init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
+    """
+    Generate random initial positions and goals for agents with minimum distance constraint.
+    
+    Args:
+        n_agents: Number of agents
+        init_position_range: Tuple of (min_pos, max_pos) for position bounds
+        
+    Returns:
+        Tuple of (initial_positions, goals) where each is a list of jnp.ndarray
+    """
+    init_ps = []
+    goals = []
+    
+    min_pos, max_pos = init_position_range
+    pos_range = max_pos - min_pos
+    
+    # Minimum distance between agents (0.05 * init_range_x)
+    min_distance = 0.03 * pos_range
+    
+    max_tries = 1000
+    
+    # Generate initial positions with minimum distance constraint
+    for _ in range(n_agents):
+        init_pos = None
+        for _ in range(max_tries):
+            x = random.uniform(min_pos, max_pos)
+            y = random.uniform(min_pos, max_pos)
+            
+            candidate_pos = jnp.array([x, y])
+            
+            # Check minimum distance from other agents
+            too_close = False
+            for existing_pos in init_ps:
+                distance = jnp.linalg.norm(candidate_pos - existing_pos)
+                if distance < min_distance:
+                    too_close = True
+                    break
+            
+            if not too_close:
+                init_pos = candidate_pos
+                break
+        
+        # If we couldn't find a valid position after max_tries, use the last candidate
+        if init_pos is None:
+            init_pos = candidate_pos
+        
+        init_ps.append(init_pos)
+    
+    # Generate random goals with minimum distance constraint
+    for _ in range(n_agents):
+        goal = None
+        for _ in range(max_tries):
+            x = random.uniform(min_pos, max_pos)
+            y = random.uniform(min_pos, max_pos)
+            
+            candidate_goal = jnp.array([x, y])
+            
+            # Check minimum distance from other goals
+            too_close = False
+            for existing_goal in goals:
+                distance = jnp.linalg.norm(candidate_goal - existing_goal)
+                if distance < min_distance:
+                    too_close = True
+                    break
+            
+            if not too_close:
+                goal = candidate_goal
+                break
+        
+        # If we couldn't find a valid goal after max_tries, use the last candidate
+        if goal is None:
+            goal = candidate_goal
+        
+        goals.append(goal)
+    
+    return init_ps, goals
 
 def parse_arguments():
     """
