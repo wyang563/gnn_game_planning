@@ -204,7 +204,7 @@ class LQRPlotter:
                 ax.plot(simulation_steps, agent.loss_history, color=color, 
                        linewidth=2, label=f'Agent {agent.id}')
         
-        ax.set_xlabel('Optimization Iteration')
+        ax.set_xlabel('Time Step')
         ax.set_ylabel('Loss Value')
         ax.set_title('Agent Loss Values Over Optimization Iterations')
         ax.legend()
@@ -262,7 +262,7 @@ class LQRPlotter:
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1)
         
-        ax.set_xlabel('Optimization Iteration')
+        ax.set_xlabel('Time Step')
         ax.set_ylabel('Minimum Pairwise Distance')
         ax.set_title('Minimum Pairwise Distance Between Agents Over Time')
         ax.legend()

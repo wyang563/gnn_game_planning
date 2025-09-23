@@ -186,6 +186,8 @@ class Simulator:
             jnp.concatenate([all_idx[:i], all_idx[i+1:]])
             for i in range(self.n_agents)
         ])
+        
+        # metrics we log
         self.all_loss_vals = []
         self.all_min_pairwise_distances = []
     
@@ -232,18 +234,28 @@ class Simulator:
         self.horizon_x0s = x_trajs[:, iter_timestep]
         start_ind = iter_timestep 
         end_ind = min(start_ind + self.horizon, self.time_steps)
-        self.horizon_u_trajs = jnp.stack([jnp.zeros((end_ind - start_ind, 2)) for _ in range(self.n_agents)])
-        self.horizon_rej_trajs = jnp.stack([agent.ref_traj[start_ind:end_ind] for agent in self.agents])
+        self.horizon_u_trajs = jnp.zeros((self.n_agents, end_ind - start_ind, 2))
+        self.horizon_rej_trajs = self.ref_trajs[:, start_ind:end_ind, :]
 
-    def global_min_pairwise_distance(self, all_x_pos: jnp.ndarray) -> jnp.ndarray:
-        N = all_x_pos.shape[0]
-        X = jnp.swapaxes(all_x_pos, 0, 1)  
-        d2 = jnp.sum((X[:, :, None, :] - X[:, None, :, :]) ** 2, axis=-1)
+    def global_min_pairwise_distance(self, all_x_pos: jnp.ndarray, iter_timestep: int) -> jnp.ndarray:
+        """Return min distance between any pair of distinct agents at a given timestep.
 
-        mask = ~jnp.eye(N, dtype=bool)            
-        masked_d2 = jnp.where(mask, d2, jnp.inf)  
+        Args:
+            all_x_pos: Array of shape (num_agents, num_timesteps, 2)
+            iter_timestep: Timestep index at which to compute pairwise distance
+        """
+        # Positions at the specified timestep: shape (num_agents, 2)
+        X_t = all_x_pos[:, iter_timestep, :]
+        N = X_t.shape[0]
 
-        min_d2 = jnp.min(masked_d2)               
+        # Compute pairwise squared distances at this timestep only: shape (N, N)
+        d2 = jnp.sum((X_t[:, None, :] - X_t[None, :, :]) ** 2, axis=-1)
+
+        # Exclude self-distances
+        mask = ~jnp.eye(N, dtype=bool)
+        masked_d2 = jnp.where(mask, d2, jnp.inf)
+
+        min_d2 = jnp.min(masked_d2)
         return jnp.sqrt(min_d2)
 
     def step(self) -> None:
@@ -278,7 +290,7 @@ class Simulator:
             other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
             loss_vals = self.jit_batched_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
             self.all_loss_vals.append(loss_vals)
-            min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos)
+            min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos, iter_timestep)
             self.all_min_pairwise_distances.append(min_pairwise_distance)
             if iter_timestep % int(self.time_steps/10) == 0:
                 loss_str = f"iter[{iter_timestep}/{self.time_steps}] | "
