@@ -31,8 +31,9 @@ class LQRPlotter:
         self.figsize = figsize
         self.dpi = dpi
         
-        # Colors for different agents
-        self.colors = plt.cm.tab10(np.linspace(0, 1, self.n_agents))
+        # Colors for different agents (ensure unique, well-separated colors even for many agents)
+        cmap = plt.cm.get_cmap('nipy_spectral', self.n_agents)
+        self.colors = cmap(np.arange(self.n_agents))
         
         # Create timestamped output directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -95,18 +96,21 @@ class LQRPlotter:
             y_positions = agent.x_traj[:, 1]
             
             # Plot trajectory
-            ax.plot(x_positions, y_positions, color=color, linewidth=2, 
-                   label=f'Agent {agent.id} trajectory', alpha=0.8)
+            ax.plot(x_positions, y_positions, color=color, linewidth=2, alpha=0.8)
             
-            # Plot start position
+            # Plot start position and label with agent id
             ax.scatter(agent.x0[0], agent.x0[1], color=color, s=100, 
-                      marker='o', edgecolor='black', linewidth=2, 
-                      label=f'Agent {agent.id} start')
+                      marker='o', edgecolor='black', linewidth=2)
+            ax.text(float(agent.x0[0]), float(agent.x0[1]), f"{agent.id}",
+                    color='black', fontsize=10, ha='center', va='center',
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5))
             
-            # Plot goal position
+            # Plot goal position and label with agent id
             ax.scatter(agent.goal[0], agent.goal[1], color=color, s=150, 
-                      marker='*', edgecolor='black', linewidth=2,
-                      label=f'Agent {agent.id} goal')
+                      marker='*', edgecolor='black', linewidth=2)
+            ax.text(float(agent.goal[0]), float(agent.goal[1]), f"{agent.id}",
+                    color='black', fontsize=10, ha='center', va='center',
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5))
         
         bounds = self._get_dynamic_bounds(padding=0.08)
         ax.set_xlim(bounds[0], bounds[1])
@@ -114,7 +118,6 @@ class LQRPlotter:
         ax.set_xlabel('X Position')
         ax.set_ylabel('Y Position')
         ax.set_title('Agent Trajectories')
-        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal', adjustable='box')
         
@@ -324,7 +327,6 @@ class LQRPlotter:
         ax.set_xlabel('X Position')
         ax.set_ylabel('Y Position')
         ax.set_title('Agent Trajectories Animation')
-        ax.legend(loc='upper right')
         ax.grid(True, alpha=0.3)
         ax.set_aspect('equal', adjustable='box')
         

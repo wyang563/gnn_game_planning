@@ -124,6 +124,7 @@ class Simulator:
         init_ps: List[jnp.ndarray] = None,
         goals: List[jnp.ndarray] = None,
         init_type: str = "random",
+        debug: bool = False,
     ) -> None: 
 
         self.n_agents = n_agents
@@ -139,6 +140,7 @@ class Simulator:
         self.agent_trajectories = None
         self.optimization_iters = optimization_iters 
         self.step_size = step_size
+        self.debug = debug
         self.agents: List[Agent] = []
         self.setup_sim(init_ps, goals, init_type)
         
@@ -278,25 +280,31 @@ class Simulator:
     def run(self) -> None:
         for iter_timestep in tqdm(range(self.time_steps)):
             self.setup_horizon_arrays(iter_timestep)
-            
             # run optimization for horizon trajectory
             for _ in range(self.optimization_iters):
                 self.step()
 
-            # calculate loss vals/min pairwise distances
-            x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
-            all_x_pos = x_trajs[:, :, :2]
-            other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
-            other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
-            loss_vals = self.jit_batched_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
-            self.all_loss_vals.append(loss_vals)
-            min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos, iter_timestep)
-            self.all_min_pairwise_distances.append(min_pairwise_distance)
-            if iter_timestep % int(self.time_steps/10) == 0:
-                loss_str = f"iter[{iter_timestep}/{self.time_steps}] | "
-                for i, agent in enumerate(self.agents):
-                    loss_str += f"Agent {agent.id}: {loss_vals[i]:.3f} | "
-                print(loss_str)
+            if self.debug:
+                # calculate loss vals/min pairwise distances
+                x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
+                all_x_pos = x_trajs[:, :, :2]
+                other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
+                other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
+                min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos, iter_timestep)
+                self.all_min_pairwise_distances.append(min_pairwise_distance)
+
+                # calculate loss values for specific time step
+                x_trajs_t = x_trajs[:, iter_timestep:iter_timestep+1, :]
+                u_trajs_t = self.u_trajs[:, iter_timestep:iter_timestep+1, :]
+                ref_trajs_t = self.ref_trajs[:, iter_timestep:iter_timestep+1, :]
+                other_trajs_t = other_trajs_batch[:, iter_timestep:iter_timestep+1, :, :]
+                loss_vals_t = self.jit_batched_loss(x_trajs_t, u_trajs_t, ref_trajs_t, other_trajs_t)
+                self.all_loss_vals.append(loss_vals_t)
+                if iter_timestep % int(self.time_steps/10) == 0:
+                    loss_str = f"iter[{iter_timestep}/{self.time_steps}] | "
+                    for i, agent in enumerate(self.agents):
+                        loss_str += f"Agent {agent.id}: {loss_vals_t[i]:.3f} | "
+                    print(loss_str)
 
             # update u_trajs
             self.u_trajs = self.u_trajs.at[:, iter_timestep, :].set(self.horizon_u_trajs[:, 0, :])
@@ -311,6 +319,9 @@ class Simulator:
             print(f"Agent {agent.id}, converged={agent.check_convergence()}")
 
 if __name__ == "__main__":
+    # DEBUG MODE
+    DEBUG = True
+
     # Parse command line arguments
     args = parse_arguments()
     
@@ -356,6 +367,7 @@ if __name__ == "__main__":
         goal_threshold=goal_threshold,
         optimization_iters=optimization_iters,
         init_type=init_type,
+        debug=DEBUG,
     )
 
     # Print initial conditions
