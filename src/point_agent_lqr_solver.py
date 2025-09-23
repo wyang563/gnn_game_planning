@@ -22,6 +22,7 @@ class Agent(iLQR):
         R: jnp.ndarray,
         W: jnp.ndarray,
         horizon: int,
+        time_steps: int,
         x0: jnp.ndarray,
         u_traj: jnp.ndarray,
         goal: jnp.ndarray,
@@ -32,6 +33,7 @@ class Agent(iLQR):
         # simulation parameters 
         self.id = id
         self.horizon = horizon
+        self.time_steps = time_steps
         # Prefer CUDA if available; fallback to CPU
         if device is None:
             cuda_devs = jax.devices("cuda")
@@ -48,11 +50,6 @@ class Agent(iLQR):
         self.ref_traj = jax.device_put(self.get_ref_traj(), self.device)
         self.goal_threshold = goal_threshold
         self.x_traj: Optional[jnp.ndarray] = None  
-        # self.A_traj: Optional[jnp.ndarray] = None 
-        # self.B_traj: Optional[jnp.ndarray] = None
-        # self.a_traj: Optional[jnp.ndarray] = None
-        # self.b_traj: Optional[jnp.ndarray] = None
-        # self.v_traj: Optional[jnp.ndarray] = None
 
         # values for logging
         self.loss_history: List[float] = []
@@ -98,8 +95,9 @@ class Agent(iLQR):
         print(f"  x_traj={self.x_traj}")
         print(f"  u_traj={self.u_traj}")
 
+    # whole simulation versions of function
     def get_ref_traj(self):
-        return jnp.linspace(self.x0[:2], self.goal, self.horizon+1)[1:]
+        return jnp.linspace(self.x0[:2], self.goal, self.time_steps+1)[1:]
     
     def calculate_x_traj(self):
         return self.jit_linearize_dyn(self.x0, self.u_traj)[0]
@@ -115,6 +113,7 @@ class Simulator:
         Q: jnp.ndarray,
         R: jnp.ndarray, 
         W: jnp.ndarray,
+        time_steps: int, # number of horizons calculated per iteration
         horizon: int, 
         dt: float, 
         init_arena_range: Tuple[float, float], 
@@ -132,8 +131,8 @@ class Simulator:
         self.R = R
         self.W = W
         self.horizon = horizon
+        self.time_steps = time_steps
         self.dt = dt
-        self.timestep = 0
         self.init_arena_range = init_arena_range
         self.device = jax.devices(device)[0]
         self.goal_threshold = goal_threshold
@@ -155,7 +154,7 @@ class Simulator:
         for i in range(self.n_agents):
             px, py = float(init_ps[i][0]), float(init_ps[i][1]) 
             x0 = jnp.array([px, py, -0.8, 0.0])
-            u_traj = jnp.zeros((self.horizon, 2))
+            u_traj = jnp.zeros((self.time_steps, 2))
             goal_i = goals[i]
 
             agent = Agent(
@@ -167,6 +166,7 @@ class Simulator:
                 R=self.R,
                 W=self.W,
                 horizon=self.horizon,
+                time_steps=self.time_steps,
                 x0=x0,
                 u_traj=u_traj,
                 goal=goal_i,
@@ -225,6 +225,16 @@ class Simulator:
         self.jit_batched_solve = jit(batched_solve, device=self.device)
         self.jit_batched_loss = jit(batched_loss, device=self.device)
     
+    def setup_horizon_arrays(self, iter_timestep: int):
+        # calculate x0s, u_trajs, ref_trajs starting at a given timestep 
+        # to prepare for horizon calculations
+        x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
+        self.horizon_x0s = x_trajs[:, iter_timestep]
+        start_ind = iter_timestep 
+        end_ind = min(start_ind + self.horizon, self.time_steps)
+        self.horizon_u_trajs = jnp.stack([jnp.zeros((end_ind - start_ind, 2)) for _ in range(self.n_agents)])
+        self.horizon_rej_trajs = jnp.stack([agent.ref_traj[start_ind:end_ind] for agent in self.agents])
+
     def global_min_pairwise_distance(self, all_x_pos: jnp.ndarray) -> jnp.ndarray:
         N = all_x_pos.shape[0]
         X = jnp.swapaxes(all_x_pos, 0, 1)  
@@ -238,7 +248,7 @@ class Simulator:
 
     def step(self) -> None:
         # Step 1: Batched linearize dynamics for all agents
-        x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
+        x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(self.horizon_x0s, self.horizon_u_trajs)
         
         # Step 2: Prepare other player trajectories for each agent
         # Create a 3D array where other_trajs[i] contains trajectories of all other agents for agent i
@@ -246,31 +256,38 @@ class Simulator:
         other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
         other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
 
-        min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos)
-        self.all_min_pairwise_distances.append(min_pairwise_distance)
-
-        # Step 3: Batched linearize loss and solve for all agents
-        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
-        loss_vals = self.jit_batched_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
-        self.all_loss_vals.append(loss_vals)
+        # Step 3: solve for all agents
+        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.horizon_u_trajs, self.horizon_rej_trajs, other_trajs_batch)
         v_trajs, _ = self.jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
         
-        # calculate min pairwise distance of each agent 
         # Step 4: Update control trajectories
-        self.u_trajs += self.step_size * v_trajs
-        
-        # Print logging for loss values
-        if int(self.timestep / self.dt) % int(self.optimization_iters/10) == 0:
-            loss_str = f"iter[{int(self.timestep / self.dt)}/{self.optimization_iters}] | "
-            for i, agent in enumerate(self.agents):
-                loss_str += f"Agent {agent.id}: {loss_vals[i]:.3f} | "
-            print(loss_str)
-
-        self.timestep += self.dt
+        self.horizon_u_trajs += self.step_size * v_trajs
     
     def run(self) -> None:
-        for _ in tqdm(range(self.optimization_iters)):
-            self.step()
+        for iter_timestep in tqdm(range(self.time_steps)):
+            self.setup_horizon_arrays(iter_timestep)
+            
+            # run optimization for horizon trajectory
+            for _ in range(self.optimization_iters):
+                self.step()
+
+            # calculate loss vals/min pairwise distances
+            x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
+            all_x_pos = x_trajs[:, :, :2]
+            other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
+            other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
+            loss_vals = self.jit_batched_loss(x_trajs, self.u_trajs, self.ref_trajs, other_trajs_batch)
+            self.all_loss_vals.append(loss_vals)
+            min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos)
+            self.all_min_pairwise_distances.append(min_pairwise_distance)
+            if iter_timestep % int(self.time_steps/10) == 0:
+                loss_str = f"iter[{iter_timestep}/{self.time_steps}] | "
+                for i, agent in enumerate(self.agents):
+                    loss_str += f"Agent {agent.id}: {loss_vals[i]:.3f} | "
+                print(loss_str)
+
+            # update u_trajs
+            self.u_trajs = self.u_trajs.at[:, iter_timestep, :].set(self.horizon_u_trajs[:, 0, :])
         
         # calculate x_traj/u_traj for all agents based off batched values in simulator
         for i, agent in enumerate(self.agents):
@@ -310,6 +327,7 @@ if __name__ == "__main__":
     Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
     R = jnp.diag(jnp.array(simulator_config['R']))
     W = jnp.array(simulator_config['W'])  # w1 = collision, w2 = collision cost exp decay, w3 = control, w4 = navigation
+    time_steps = int(simulator_config['time_steps'])
 
     # Create simulator    
     simulator = Simulator(
@@ -318,6 +336,7 @@ if __name__ == "__main__":
         R=R,
         W=W,
         horizon=horizon,
+        time_steps=time_steps,
         dt=dt,
         init_arena_range=init_arena_range,
         device=device,
