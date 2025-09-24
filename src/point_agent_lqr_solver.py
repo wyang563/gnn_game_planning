@@ -126,6 +126,8 @@ class Simulator:
         goals: List[jnp.ndarray] = None,
         init_type: str = "random",
         limit_past_horizon: bool = False,
+        masking_method: str = None,
+        top_k: int = 3,
         debug: bool = False,
     ) -> None: 
 
@@ -144,14 +146,15 @@ class Simulator:
         self.step_size = step_size
         self.debug = debug
         self.limit_past_horizon = limit_past_horizon
+        self.top_k = top_k
 
         self.agents: List[Agent] = []
-        self.setup_sim(init_ps, goals, init_type)
+        self.setup_sim(init_ps, goals, init_type, masking_method)
         
         # Create batched jitted functions for better GPU utilization
         self._setup_batched_functions()
 
-    def setup_sim(self, init_ps: List[jnp.ndarray] = None, goals: List[jnp.ndarray] = None, init_type: str = "random") -> None:
+    def setup_sim(self, init_ps: List[jnp.ndarray] = None, goals: List[jnp.ndarray] = None, init_type: str = "random", masking_method: str = None) -> None:
         if init_type == "origin":
             init_ps, goals = origin_init_collision(self.n_agents, self.init_arena_range)
         elif init_type == "random":
@@ -196,6 +199,13 @@ class Simulator:
         # metrics we log
         self.all_loss_vals = []
         self.all_min_pairwise_distances = []
+
+        # setup masking method
+        if masking_method is not None:
+            if masking_method == "nearest_neighbors":
+                self.jit_masking_method = jit(nearest_neighbors, device=self.device, static_argnames=["top_k"])
+            else:
+                self.jit_masking_method = None
     
     def _setup_batched_functions(self):
         """Setup batched jitted functions for better GPU utilization."""
@@ -266,8 +276,8 @@ class Simulator:
 
         if pad_length > 0:
             padding = jnp.tile(x_trajs[:, start_ind:start_ind+1, :], (1, pad_length, 1))
-            return jnp.concatenate([padding, traj_slice], axis=1)
-        return traj_slice
+            traj_slice = jnp.concatenate([padding, traj_slice], axis=1)
+        return jax.device_put(traj_slice, self.device)
 
     def global_min_pairwise_distance(self, all_x_pos: jnp.ndarray, iter_timestep: int) -> jnp.ndarray:
         """Return min distance between any pair of distinct agents at a given timestep.
@@ -312,7 +322,8 @@ class Simulator:
             self.setup_horizon_arrays(iter_timestep)
 
             # calculate mask of other agents to consider for each agent
-            self.other_index = nearest_neighbors(self.get_past_x_trajs(iter_timestep), 5)
+            if self.jit_masking_method is not None:
+                self.other_index = self.jit_masking_method(self.get_past_x_trajs(iter_timestep), top_k=top_k)
 
             # run optimization for horizon trajectory
             for _ in range(self.optimization_iters):
@@ -379,7 +390,11 @@ if __name__ == "__main__":
     optimization_iters = simulator_config['optimization_iters']  # Total simulation steps
     step_size = simulator_config['step_size']
     init_type = simulator_config['init_type']
+    
+    # TODO: change this once we set up configs for masking functions
     limit_past_horizon = True # TODO: change this once we set up configs for masking functions 
+    masking_method= "nearest_neighbors"
+    top_k = 3
 
     # Cost weights (position, velocity, control)
     Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
@@ -403,6 +418,8 @@ if __name__ == "__main__":
         optimization_iters=optimization_iters,
         init_type=init_type,
         limit_past_horizon=limit_past_horizon,
+        masking_method=masking_method,
+        top_k=top_k,
         debug=DEBUG,
     )
 
