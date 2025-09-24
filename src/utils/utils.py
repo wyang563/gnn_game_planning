@@ -7,6 +7,7 @@ import os
 import random
 import yaml
 import argparse
+from policies import *
 
 def origin_init_collision(n_agents: int, 
                 init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
@@ -207,3 +208,6 @@ def parse_arguments():
         help='Path to YAML configuration file (default: configs/point_agent_small.yaml)'
     )
     return parser.parse_args()
+
+def get_masking_function(masking_func_str: str):
+    pass

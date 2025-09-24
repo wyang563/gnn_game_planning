@@ -6,6 +6,7 @@ from lqrax import iLQR
 from utils.utils import origin_init_collision, random_init, load_config, parse_arguments
 from utils.point_agent_lqr_plots import LQRPlotter
 from tqdm import tqdm
+from policies import *
 
 # Configure JAX to use float32 by default for better performance
 jax.config.update("jax_default_dtype_bits", "32")
@@ -124,6 +125,7 @@ class Simulator:
         init_ps: List[jnp.ndarray] = None,
         goals: List[jnp.ndarray] = None,
         init_type: str = "random",
+        limit_past_horizon: bool = False,
         debug: bool = False,
     ) -> None: 
 
@@ -141,6 +143,8 @@ class Simulator:
         self.optimization_iters = optimization_iters 
         self.step_size = step_size
         self.debug = debug
+        self.limit_past_horizon = limit_past_horizon
+
         self.agents: List[Agent] = []
         self.setup_sim(init_ps, goals, init_type)
         
@@ -229,15 +233,41 @@ class Simulator:
         self.jit_batched_solve = jit(batched_solve, device=self.device)
         self.jit_batched_loss = jit(batched_loss, device=self.device)
     
+    def calculate_x_trajs(self):
+        x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
+        return x_trajs
+
     def setup_horizon_arrays(self, iter_timestep: int):
         # calculate x0s, u_trajs, ref_trajs starting at a given timestep 
-        # to prepare for horizon calculations
-        x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
+        # to prepare for horizon optimization calculations 
+        x_trajs = self.calculate_x_trajs()
         self.horizon_x0s = x_trajs[:, iter_timestep]
         start_ind = iter_timestep 
         end_ind = min(start_ind + self.horizon, self.time_steps)
         self.horizon_u_trajs = jnp.zeros((self.n_agents, end_ind - start_ind, 2))
         self.horizon_rej_trajs = self.ref_trajs[:, start_ind:end_ind, :]
+    
+    def get_past_x_trajs(self, iter_timestep: int):
+        # get all x_traj data from [iter_timestep - horizon, iter_timestep], pad if the 
+        # data ends up being shorter than length horizon
+        x_trajs = self.calculate_x_trajs()
+        if self.limit_past_horizon:
+            start_ind = 0
+        else:
+            start_ind = max(0, iter_timestep - self.horizon)
+
+        end_ind = iter_timestep
+        traj_slice = x_trajs[:, start_ind:end_ind, :]
+        
+        if self.limit_past_horizon:
+            pad_length = self.time_steps - (end_ind - start_ind + 1)
+        else:
+            pad_length = self.horizon - (end_ind - start_ind + 1)
+
+        if pad_length > 0:
+            padding = jnp.tile(x_trajs[:, start_ind:start_ind+1, :], (1, pad_length, 1))
+            return jnp.concatenate([padding, traj_slice], axis=1)
+        return traj_slice
 
     def global_min_pairwise_distance(self, all_x_pos: jnp.ndarray, iter_timestep: int) -> jnp.ndarray:
         """Return min distance between any pair of distinct agents at a given timestep.
@@ -280,6 +310,10 @@ class Simulator:
     def run(self) -> None:
         for iter_timestep in tqdm(range(self.time_steps)):
             self.setup_horizon_arrays(iter_timestep)
+
+            # calculate mask of other agents to consider for each agent
+            self.other_index = nearest_neighbors(self.get_past_x_trajs(iter_timestep), 5)
+
             # run optimization for horizon trajectory
             for _ in range(self.optimization_iters):
                 self.step()
@@ -345,6 +379,7 @@ if __name__ == "__main__":
     optimization_iters = simulator_config['optimization_iters']  # Total simulation steps
     step_size = simulator_config['step_size']
     init_type = simulator_config['init_type']
+    limit_past_horizon = True # TODO: change this once we set up configs for masking functions 
 
     # Cost weights (position, velocity, control)
     Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
@@ -367,6 +402,7 @@ if __name__ == "__main__":
         goal_threshold=goal_threshold,
         optimization_iters=optimization_iters,
         init_type=init_type,
+        limit_past_horizon=limit_past_horizon,
         debug=DEBUG,
     )
 
