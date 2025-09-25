@@ -430,11 +430,26 @@ class LQRPlotter:
             # Prepare timestep data
             timestep_data = {}
             for t in range(len(x_traj)):
-                timestep_data[str(t)] = {
+                timestep_entry = {
                     "x_traj": x_traj[t],
                     "u_traj": u_traj[t],
                     "loss": loss_history[t] if t < len(loss_history) else None
                 }
+                
+                # Add player mask data for this agent at this timestep
+                if (hasattr(simulator, 'player_masks') and simulator.player_masks and 
+                    t < len(simulator.player_masks)):
+                    # Get the mask for this specific agent at this timestep
+                    player_mask_np = np.asarray(simulator.player_masks[t])
+                    if agent.id < len(player_mask_np):
+                        # other_index[agent_id] contains the indices of other agents visible to agent_id
+                        visible_agents = player_mask_np[agent.id].tolist()
+                        timestep_entry["player_mask"] = {
+                            "visible_other_agents": visible_agents,
+                            "masked_other_agents": [i for i in range(self.n_agents) if i != agent.id and i not in visible_agents]
+                        }
+                
+                timestep_data[str(t)] = timestep_entry
             
             agents_data[f"agent_{agent.id}"] = {
                 "agent_info": {
@@ -458,6 +473,154 @@ class LQRPlotter:
         
         print(f"Simulation data saved to: {save_path}")
     
+    def create_ego_agent_gif(self, simulator, save_path: Optional[str] = None, 
+                            interval: int = 100, timestep_interval: int = 20):
+        """
+        Create an animated GIF showing each agent's perspective with color-coded trajectories.
+        
+        Args:
+            simulator: Simulator object containing player_masks data
+            save_path: Optional custom save path, defaults to output_dir
+            interval: Animation interval in milliseconds
+            timestep_interval: Only show frames at timesteps divisible by this number
+        """
+        if not hasattr(simulator, 'player_masks') or not simulator.player_masks:
+            print("Warning: No player masks data available. Cannot create ego agent GIF.")
+            return
+        
+        print("Creating ego agent perspective GIFs...")
+        
+        # Get maximum trajectory length
+        max_traj_len = max(len(agent.x_traj) for agent in self.agents)
+        
+        # Create a GIF for each agent as the ego agent
+        for ego_agent_id in range(self.n_agents):
+            print(f"Creating ego perspective for Agent {ego_agent_id}...")
+            
+            fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
+            
+            # Initialize plot elements for all agents
+            lines = []
+            points = []
+            goals = []
+            labels = []
+            
+            for i, agent in enumerate(self.agents):
+                # Trajectory line (will show entire current trajectory each frame)
+                line, = ax.plot([], [], linewidth=2, alpha=0.7)
+                lines.append(line)
+                
+                # Current position point
+                point, = ax.plot([], [], marker='o', markersize=8,
+                                markeredgecolor='black', markeredgewidth=1)
+                points.append(point)
+                
+                # Goal position (static)
+                goal = ax.scatter(agent.goal[0], agent.goal[1], s=150,
+                                marker='*', edgecolor='black', linewidth=2,
+                                alpha=0.8)
+                goals.append(goal)
+                
+                # Labels for start and goal positions
+                start_label = ax.text(0, 0, '', color='black', fontsize=10, ha='center', va='center',
+                                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5))
+                goal_label = ax.text(0, 0, '', color='black', fontsize=10, ha='center', va='center',
+                                   bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5))
+                labels.append((start_label, goal_label))
+            
+            bounds = self._get_dynamic_bounds(padding=0.08)
+            ax.set_xlim(bounds[0], bounds[1])
+            ax.set_ylim(bounds[2], bounds[3])
+            ax.set_xlabel('X Position')
+            ax.set_ylabel('Y Position')
+            ax.set_title(f'Agent {ego_agent_id} Ego Perspective - Trajectory Animation')
+            ax.grid(True, alpha=0.3)
+            ax.set_aspect('equal', adjustable='box')
+            
+            def animate(frame):
+                # Only show frames at specified intervals
+                if frame % timestep_interval != 0:
+                    return lines + points
+                
+                # Get the player mask for this timestep (if available)
+                timestep_idx = min(frame // timestep_interval, len(simulator.player_masks) - 1)
+                if timestep_idx < len(simulator.player_masks):
+                    ego_mask = simulator.player_masks[timestep_idx][ego_agent_id]
+                    # Convert to set for faster lookup
+                    masked_agents = set(ego_mask.tolist())
+                else:
+                    # Fallback: all other agents are masked
+                    masked_agents = set(range(self.n_agents)) - {ego_agent_id}
+                
+                for i, agent in enumerate(self.agents):
+                    if frame < len(agent.x_traj):
+                        # Update current position
+                        x_pos = agent.x_traj[frame, 0]
+                        y_pos = agent.x_traj[frame, 1]
+                        points[i].set_data([x_pos], [y_pos])
+                        
+                        # Show entire trajectory up to current frame
+                        x_trajectory = agent.x_traj[:frame+1, 0]
+                        y_trajectory = agent.x_traj[:frame+1, 1]
+                        lines[i].set_data(x_trajectory, y_trajectory)
+                        
+                        # Update start position label
+                        labels[i][0].set_position((float(agent.x0[0]), float(agent.x0[1])))
+                        labels[i][0].set_text(f"{agent.id}")
+                        
+                        # Update goal position label
+                        labels[i][1].set_position((float(agent.goal[0]), float(agent.goal[1])))
+                        labels[i][1].set_text(f"{agent.id}")
+                    else:
+                        # Keep final position if trajectory is shorter
+                        final_x = agent.x_traj[-1, 0]
+                        final_y = agent.x_traj[-1, 1]
+                        points[i].set_data([final_x], [final_y])
+                        lines[i].set_data(agent.x_traj[:, 0], agent.x_traj[:, 1])
+                        
+                        # Update labels
+                        labels[i][0].set_position((float(agent.x0[0]), float(agent.x0[1])))
+                        labels[i][0].set_text(f"{agent.id}")
+                        labels[i][1].set_position((float(agent.goal[0]), float(agent.goal[1])))
+                        labels[i][1].set_text(f"{agent.id}")
+                    
+                    # Set colors based on ego agent perspective
+                    if i == ego_agent_id:
+                        # Ego agent: green
+                        color = 'green'
+                        alpha = 1.0
+                    elif i in masked_agents:
+                        # Masked agents: red
+                        color = 'red'
+                        alpha = 0.8
+                    else:
+                        # Other agents: light gray
+                        color = 'lightgray'
+                        alpha = 0.5
+                    
+                    lines[i].set_color(color)
+                    lines[i].set_alpha(alpha)
+                    points[i].set_color(color)
+                    points[i].set_alpha(alpha)
+                    goals[i].set_color(color)
+                    goals[i].set_alpha(alpha)
+                
+                return lines + points + [label for label_pair in labels for label in label_pair]
+            
+            # Create animation
+            anim = animation.FuncAnimation(fig, animate, frames=max_traj_len,
+                                         interval=interval, blit=True, repeat=True)
+            
+            if save_path is None:
+                ego_save_path = os.path.join(self.output_dir, f'ego_agent_{ego_agent_id}_perspective.gif')
+            else:
+                ego_save_path = save_path.replace('.gif', f'_ego_{ego_agent_id}.gif')
+            
+            # Save as GIF
+            anim.save(ego_save_path, writer='pillow', fps=1000//interval)
+            plt.close()
+            print(f"Ego agent {ego_agent_id} perspective animation saved to: {ego_save_path}")
+
     def plot_all(self, create_gif: bool = False, gif_interval: int = 100, dump_data: bool = True, simulator=None):
         """
         Generate all plots and optionally the trajectory GIF and simulation data dump.

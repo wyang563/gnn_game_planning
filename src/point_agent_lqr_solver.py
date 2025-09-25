@@ -395,7 +395,7 @@ if __name__ == "__main__":
     
     # TODO: change this once we set up configs for masking functions
     limit_past_horizon = True # TODO: change this once we set up configs for masking functions 
-    masking_method= None
+    masking_method= "nearest_neighbors"
     top_k = 5
 
     # Cost weights (position, velocity, control)
@@ -445,5 +445,9 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=True, gif_interval=50, dump_data=False, simulator=simulator)
+    plotter.plot_all(create_gif=True, gif_interval=50, dump_data=True, simulator=simulator)
+    
+    # Generate ego agent perspective GIFs
+    print("\nGenerating ego agent perspective GIFs...")
+    plotter.create_ego_agent_gif(simulator, timestep_interval=20, interval=100)
     
