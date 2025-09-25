@@ -494,7 +494,7 @@ class LQRPlotter:
         max_traj_len = max(len(agent.x_traj) for agent in self.agents)
         
         # Create a GIF for each agent as the ego agent
-        for ego_agent_id in range(self.n_agents):
+        for ego_agent_id in range(min(self.n_agents, 3)):
             print(f"Creating ego perspective for Agent {ego_agent_id}...")
             
             fig, ax = plt.subplots(figsize=self.figsize, dpi=self.dpi)
@@ -538,16 +538,14 @@ class LQRPlotter:
             ax.set_aspect('equal', adjustable='box')
             
             def animate(frame):
-                # Only show frames at specified intervals
-                if frame % timestep_interval != 0:
-                    return lines + points
+                # Map animation frame to simulation timestep
+                # Since player_masks are stored per simulation timestep, we need to map
+                # the animation frame to the corresponding simulation timestep
+                sim_timestep = min(frame, len(simulator.player_masks) - 1)
                 
-                # Get the player mask for this timestep (if available)
-                timestep_idx = min(frame // timestep_interval, len(simulator.player_masks) - 1)
-                if timestep_idx < len(simulator.player_masks):
-                    ego_mask = simulator.player_masks[timestep_idx][ego_agent_id]
-                    # Convert to set for faster lookup
-                    masked_agents = set(ego_mask.tolist())
+                # Get the player mask for this simulation timestep (if available)
+                if sim_timestep < len(simulator.player_masks):
+                    masked_agents = set(simulator.player_masks[sim_timestep][ego_agent_id].tolist())
                 else:
                     # Fallback: all other agents are masked
                     masked_agents = set(range(self.n_agents)) - {ego_agent_id}
@@ -594,7 +592,7 @@ class LQRPlotter:
                         color = 'red'
                         alpha = 0.8
                     else:
-                        # Other agents: light gray
+                        # Visible other agents: light gray
                         color = 'lightgray'
                         alpha = 0.5
                     

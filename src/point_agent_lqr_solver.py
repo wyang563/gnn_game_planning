@@ -393,10 +393,11 @@ if __name__ == "__main__":
     step_size = simulator_config['step_size']
     init_type = simulator_config['init_type']
     
-    # TODO: change this once we set up configs for masking functions
-    limit_past_horizon = True # TODO: change this once we set up configs for masking functions 
-    masking_method= "nearest_neighbors"
-    top_k = 5
+    # extracting masking method config
+    masking_config = config['masking']
+    limit_past_horizon = masking_config['limit_past_horizon']
+    masking_method= masking_config['masking_method']
+    top_k = masking_config['top_k']
 
     # Cost weights (position, velocity, control)
     Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
@@ -445,7 +446,7 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=True, gif_interval=50, dump_data=True, simulator=simulator)
+    plotter.plot_all(create_gif=False, gif_interval=50, dump_data=True, simulator=simulator)
     
     # Generate ego agent perspective GIFs
     print("\nGenerating ego agent perspective GIFs...")
