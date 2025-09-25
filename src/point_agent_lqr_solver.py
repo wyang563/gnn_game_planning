@@ -147,14 +147,15 @@ class Simulator:
         self.debug = debug
         self.limit_past_horizon = limit_past_horizon
         self.top_k = top_k
+        self.masking_method = masking_method
 
         self.agents: List[Agent] = []
-        self.setup_sim(init_ps, goals, init_type, masking_method)
+        self.setup_sim(init_ps, goals, init_type)
         
         # Create batched jitted functions for better GPU utilization
         self._setup_batched_functions()
 
-    def setup_sim(self, init_ps: List[jnp.ndarray] = None, goals: List[jnp.ndarray] = None, init_type: str = "random", masking_method: str = None) -> None:
+    def setup_sim(self, init_ps: List[jnp.ndarray] = None, goals: List[jnp.ndarray] = None, init_type: str = "random") -> None:
         if init_type == "origin":
             init_ps, goals = origin_init_collision(self.n_agents, self.init_arena_range)
         elif init_type == "random":
@@ -199,13 +200,7 @@ class Simulator:
         # metrics we log
         self.all_loss_vals = []
         self.all_min_pairwise_distances = []
-
-        # setup masking method
-        if masking_method is not None:
-            if masking_method == "nearest_neighbors":
-                self.jit_masking_method = jit(nearest_neighbors, device=self.device, static_argnames=["top_k"])
-            else:
-                self.jit_masking_method = None
+        self.player_masks = []
     
     def _setup_batched_functions(self):
         """Setup batched jitted functions for better GPU utilization."""
@@ -300,6 +295,13 @@ class Simulator:
         min_d2 = jnp.min(masked_d2)
         return jnp.sqrt(min_d2)
 
+    def run_masking_method(self, masking_method: str, iter_timestep: int):
+        past_x_trajs = self.get_past_x_trajs(iter_timestep)
+        if masking_method == "nearest_neighbors":
+            self.other_index = nearest_neighbors(past_x_trajs, top_k=self.top_k)
+        elif masking_method == "jacobian":
+            self.other_index = jacobian(past_x_trajs, top_k=self.top_k, dt=self.dt, w1=self.W[0], w2=self.W[1])
+
     def step(self) -> None:
         # Step 1: Batched linearize dynamics for all agents
         x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(self.horizon_x0s, self.horizon_u_trajs)
@@ -322,8 +324,7 @@ class Simulator:
             self.setup_horizon_arrays(iter_timestep)
 
             # calculate mask of other agents to consider for each agent
-            if self.jit_masking_method is not None:
-                self.other_index = self.jit_masking_method(self.get_past_x_trajs(iter_timestep), top_k=top_k)
+            self.run_masking_method(self.masking_method, iter_timestep)
 
             # run optimization for horizon trajectory
             for _ in range(self.optimization_iters):
@@ -331,6 +332,7 @@ class Simulator:
 
             if self.debug:
                 # calculate loss vals/min pairwise distances
+                self.player_masks.append(self.other_index)
                 x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
                 all_x_pos = x_trajs[:, :, :2]
                 other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
@@ -393,8 +395,8 @@ if __name__ == "__main__":
     
     # TODO: change this once we set up configs for masking functions
     limit_past_horizon = True # TODO: change this once we set up configs for masking functions 
-    masking_method= "nearest_neighbors"
-    top_k = 3
+    masking_method= None
+    top_k = 5
 
     # Cost weights (position, velocity, control)
     Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights

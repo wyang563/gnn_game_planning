@@ -3,8 +3,8 @@ simulator:
   horizon: 30
   time_steps: 200
   dt: 0.05
-  init_arena_range: [-3.0, 3.0]
-  init_type: "random"
+  init_arena_range: [-5.0, 5.0]
+  init_type: "origin"
   goal_threshold: 0.2
   device: "cuda"
   optimization_iters: 100
