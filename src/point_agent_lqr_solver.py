@@ -6,7 +6,7 @@ from lqrax import iLQR
 from utils.utils import origin_init_collision, random_init, load_config, parse_arguments
 from utils.point_agent_lqr_plots import LQRPlotter
 from tqdm import tqdm
-from policies import *
+from models.policies import *
 
 # Configure JAX to use float32 by default for better performance
 jax.config.update("jax_default_dtype_bits", "32")
@@ -116,6 +116,7 @@ class Simulator:
         W: jnp.ndarray,
         time_steps: int, # number of horizons calculated per iteration
         horizon: int, 
+        mask_horizon: int,
         dt: float, 
         init_arena_range: Tuple[float, float], 
         device: str = "cpu",
@@ -136,6 +137,7 @@ class Simulator:
         self.R = R
         self.W = W
         self.horizon = horizon
+        self.mask_horizon = mask_horizon
         self.time_steps = time_steps
         self.dt = dt
         self.init_arena_range = init_arena_range
@@ -259,7 +261,7 @@ class Simulator:
         if self.limit_past_horizon:
             start_ind = 0
         else:
-            start_ind = max(0, iter_timestep - self.horizon)
+            start_ind = max(0, iter_timestep - self.mask_horizon)
 
         end_ind = iter_timestep
         traj_slice = x_trajs[:, start_ind:end_ind, :]
@@ -267,7 +269,7 @@ class Simulator:
         if self.limit_past_horizon:
             pad_length = self.time_steps - (end_ind - start_ind + 1)
         else:
-            pad_length = self.horizon - (end_ind - start_ind + 1)
+            pad_length = self.mask_horizon - (end_ind - start_ind + 1)
 
         if pad_length > 0:
             padding = jnp.tile(x_trajs[:, start_ind:start_ind+1, :], (1, pad_length, 1))
@@ -398,6 +400,7 @@ if __name__ == "__main__":
     limit_past_horizon = masking_config['limit_past_horizon']
     masking_method= masking_config['masking_method']
     top_k = masking_config['top_k']
+    mask_horizon = masking_config['mask_horizon']
 
     # Cost weights (position, velocity, control)
     Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
@@ -412,6 +415,7 @@ if __name__ == "__main__":
         R=R,
         W=W,
         horizon=horizon,
+        mask_horizon=mask_horizon,
         time_steps=time_steps,
         dt=dt,
         init_arena_range=init_arena_range,

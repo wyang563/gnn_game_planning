@@ -8,6 +8,7 @@ jax>=0.3.27
 jaxlib>=0.3.27
 lqraux>=0.0.15
 qpth>=0.0.15
+optax>=0.2.0
 
 # Data processing and visualization
 matplotlib>=3.7.0

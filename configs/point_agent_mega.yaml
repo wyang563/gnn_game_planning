@@ -15,5 +15,6 @@ simulator:
 
 masking:
   limit_past_horizon: True
-  masking_method: "jacobian"
+  masking_method: "nearest_neighbors"
+  mask_horizon: 10
   top_k: 5

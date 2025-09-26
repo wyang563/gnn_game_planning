@@ -7,7 +7,7 @@ import os
 import random
 import yaml
 import argparse
-from policies import *
+from models.policies import *
 
 def origin_init_collision(n_agents: int, 
                 init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
