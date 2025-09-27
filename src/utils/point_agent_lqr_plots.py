@@ -442,11 +442,14 @@ class LQRPlotter:
                     # Get the mask for this specific agent at this timestep
                     player_mask_np = np.asarray(simulator.player_masks[t])
                     if agent.id < len(player_mask_np):
-                        # other_index[agent_id] contains the indices of other agents visible to agent_id
-                        visible_agents = player_mask_np[agent.id].tolist()
+                        # player_mask_np is now an n_agent x n_agent array where [i][j] = 1 if agent i includes agent j
+                        agent_mask = player_mask_np[agent.id]  # Get the mask for this agent
+                        # Convert binary mask to list of visible agent indices
+                        visible_agents = [j for j in range(len(agent_mask)) if agent_mask[j] == 1 and j != agent.id]
+                        masked_other_agents = [j for j in range(len(agent_mask)) if agent_mask[j] == 0 and j != agent.id]
                         timestep_entry["player_mask"] = {
                             "visible_other_agents": visible_agents,
-                            "masked_other_agents": [i for i in range(self.n_agents) if i != agent.id and i not in visible_agents]
+                            "masked_other_agents": masked_other_agents
                         }
                 
                 timestep_data[str(t)] = timestep_entry
@@ -545,7 +548,10 @@ class LQRPlotter:
                 
                 # Get the player mask for this simulation timestep (if available)
                 if sim_timestep < len(simulator.player_masks):
-                    masked_agents = set(simulator.player_masks[sim_timestep][ego_agent_id].tolist())
+                    # player_masks[t] is now an n_agent x n_agent array where [i][j] = 1 if agent i includes agent j
+                    ego_mask = simulator.player_masks[sim_timestep][ego_agent_id]
+                    # Masked agents are those NOT visible (mask value = 0, excluding self)
+                    masked_agents = set([j for j in range(len(ego_mask)) if ego_mask[j] == 1 and j != ego_agent_id])
                 else:
                     # Fallback: all other agents are masked
                     masked_agents = set(range(self.n_agents)) - {ego_agent_id}

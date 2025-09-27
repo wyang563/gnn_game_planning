@@ -1,111 +1,16 @@
+# This file is used for inference 
 import jax
 import jax.numpy as jnp
 from jax import jit, vmap, grad
 from typing import Tuple, Optional, List, Dict, Any
-from lqrax import iLQR
 from utils.utils import origin_init_collision, random_init, load_config, parse_arguments
 from utils.point_agent_lqr_plots import LQRPlotter
 from tqdm import tqdm
 from models.policies import *
+from agent import Agent
 
 # Configure JAX to use float32 by default for better performance
 jax.config.update("jax_default_dtype_bits", "32")
-
-
-class Agent(iLQR):
-    def __init__(
-        self, 
-        id: int,
-        dt: float, 
-        x_dim: int,
-        u_dim: int, 
-        Q: jnp.ndarray, 
-        R: jnp.ndarray,
-        W: jnp.ndarray,
-        horizon: int,
-        time_steps: int,
-        x0: jnp.ndarray,
-        u_traj: jnp.ndarray,
-        goal: jnp.ndarray,
-        device = None,
-        goal_threshold: float = 0.1,
-    ) -> None:
-        super().__init__(dt, x_dim, u_dim, Q, R)
-        # simulation parameters 
-        self.id = id
-        self.horizon = horizon
-        self.time_steps = time_steps
-        # Prefer CUDA if available; fallback to CPU
-        if device is None:
-            cuda_devs = jax.devices("cuda")
-            self.device = cuda_devs[0] if len(cuda_devs) > 0 else jax.devices("cpu")[0]
-        else:
-            self.device = device
-
-        # Place parameters and state on target device once to avoid repeated transfers
-        W_dev = jax.device_put(W, self.device)
-        self.w1, self.w2, self.w3, self.w4 = W_dev[0], W_dev[1], W_dev[2], W_dev[3]
-        self.x0 = jax.device_put(x0, self.device)
-        self.u_traj = jax.device_put(u_traj, self.device)
-        self.goal = jax.device_put(goal, self.device)
-        self.ref_traj = jax.device_put(self.get_ref_traj(), self.device)
-        self.goal_threshold = goal_threshold
-        self.x_traj: Optional[jnp.ndarray] = None  
-
-        # values for logging
-        self.loss_history: List[float] = []
-
-        # methods
-        self.jit_linearize_dyn = jit(self.linearize_dyn, device=self.device)
-        self.jit_solve = jit(self.solve, device=self.device)
-        self.jit_loss = jit(self.loss, device=self.device)
-        self.jit_linearize_loss = jit(self.linearize_loss, device=self.device)
-    
-    def dyn(self, xt: jnp.ndarray, ut: jnp.ndarray) -> jnp.ndarray:
-        return jnp.array([xt[2], xt[3], ut[0], ut[1]])
-    
-    # define loss functions
-    def runtime_loss(self, xt, ut, ref_xt, other_xts):
-        # calculate collision loss
-        current_position = xt[:2]
-        squared_distances = jnp.sum(jnp.square(current_position - other_xts), axis=1)
-        collision_loss = self.w1 * jnp.exp(-self.w2 * squared_distances)
-        collision_loss = jnp.sum(collision_loss) / other_xts.shape[0]
-
-        ctrl_loss: jnp.ndarray = self.w3 * jnp.sum(jnp.square(ut))
-        nav_loss: jnp.ndarray = self.w4 * jnp.sum(jnp.square(xt[:2]-ref_xt[:2]))
-        return nav_loss + collision_loss + ctrl_loss
-
-    def loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs):
-        runtime_loss_array = vmap(self.runtime_loss, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs)
-        return runtime_loss_array.sum() * self.dt
-
-    def linearize_loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs):
-        dldx = grad(self.runtime_loss, argnums=(0))
-        dldu = grad(self.runtime_loss, argnums=(1))
-        a_traj = vmap(dldx, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs)  
-        b_traj = vmap(dldu, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs) 
-        return a_traj, b_traj
-
-    # helpers
-    def debug_agent(self):
-        print(f"Agent {self.id}:")
-        print(f"  x0={self.x0}")
-        print(f"  goal={self.goal}")
-        print(f"  ref_traj={self.ref_traj}")
-        print(f"  x_traj={self.x_traj}")
-        print(f"  u_traj={self.u_traj}")
-
-    # whole simulation versions of function
-    def get_ref_traj(self):
-        return jnp.linspace(self.x0[:2], self.goal, self.time_steps+1)[1:]
-    
-    def calculate_x_traj(self):
-        return self.jit_linearize_dyn(self.x0, self.u_traj)[0]
-
-    def check_convergence(self) -> bool:
-        final_x_pos = self.calculate_x_traj()[-1, :2]
-        return jnp.linalg.norm(final_x_pos - self.goal) < self.goal_threshold
 
 class Simulator:
     def __init__(
@@ -129,6 +34,7 @@ class Simulator:
         limit_past_horizon: bool = False,
         masking_method: str = None,
         top_k: int = 3,
+        critical_radius: float = 1.0,
         debug: bool = False,
     ) -> None: 
 
@@ -149,6 +55,7 @@ class Simulator:
         self.debug = debug
         self.limit_past_horizon = limit_past_horizon
         self.top_k = top_k
+        self.critical_radius = critical_radius
         self.masking_method = masking_method
 
         self.agents: List[Agent] = []
@@ -192,12 +99,9 @@ class Simulator:
         self.x0s = jnp.stack([agent.x0 for agent in self.agents])
         self.u_trajs = jnp.stack([agent.u_traj for agent in self.agents])
         self.ref_trajs = jnp.stack([agent.ref_traj for agent in self.agents])
-        
-        all_idx = jnp.arange(self.n_agents)
-        self.other_index = jnp.stack([
-            jnp.concatenate([all_idx[:i], all_idx[i+1:]])
-            for i in range(self.n_agents)
-        ])
+
+        mask_diag = ~jnp.eye(self.n_agents, dtype=bool)
+        self.other_index = mask_diag.astype(jnp.int32)
         
         # metrics we log
         self.all_loss_vals = []
@@ -299,10 +203,16 @@ class Simulator:
 
     def run_masking_method(self, masking_method: str, iter_timestep: int):
         past_x_trajs = self.get_past_x_trajs(iter_timestep)
-        if masking_method == "nearest_neighbors":
-            self.other_index = nearest_neighbors(past_x_trajs, top_k=self.top_k)
-        elif masking_method == "jacobian":
-            self.other_index = jacobian(past_x_trajs, top_k=self.top_k, dt=self.dt, w1=self.W[0], w2=self.W[1])
+        if masking_method == "nearest_neighbors_top_k":
+            self.other_index = nearest_neighbors_top_k(past_x_trajs, top_k=self.top_k)
+        elif masking_method == "jacobian_top_k":
+            self.other_index = jacobian_top_k(past_x_trajs, top_k=self.top_k, dt=self.dt, w1=self.W[0], w2=self.W[1])
+        elif masking_method == "nearest_neighbors_radius":
+            self.other_index = nearest_neighbors_radius(past_x_trajs, critical_radius=self.critical_radius)
+        elif masking_method == "None":
+            pass
+        else:
+            raise ValueError(f"Invalid masking method: {masking_method}")
 
     def step(self) -> None:
         # Step 1: Batched linearize dynamics for all agents
@@ -311,7 +221,11 @@ class Simulator:
         # Step 2: Prepare other player trajectories for each agent
         # Create a 3D array where other_trajs[i] contains trajectories of all other agents for agent i
         all_x_pos = x_trajs[:, :, :2]
-        other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
+        # Use the mask to select relevant agents for each agent
+        # other_x_pos[i] will contain trajectories of agents that agent i considers
+        # Expand dimensions to broadcast: all_x_pos[None, :, :, :] * self.other_index[:, :, None, None]
+        # This creates a (n_agents, n_agents, horizon, 2) array where masked agents are zeroed
+        other_x_pos = all_x_pos[None, :, :, :] * self.other_index[:, :, None, None]
         other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
 
         # Step 3: solve for all agents
@@ -337,7 +251,7 @@ class Simulator:
                 self.player_masks.append(self.other_index)
                 x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
                 all_x_pos = x_trajs[:, :, :2]
-                other_x_pos = jnp.take(all_x_pos, self.other_index, axis=0)
+                other_x_pos = all_x_pos[None, :, :, :] * self.other_index[:, :, None, None]
                 other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
                 min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos, iter_timestep)
                 self.all_min_pairwise_distances.append(min_pairwise_distance)
@@ -400,6 +314,7 @@ if __name__ == "__main__":
     limit_past_horizon = masking_config['limit_past_horizon']
     masking_method= masking_config['masking_method']
     top_k = masking_config['top_k']
+    critical_radius = masking_config['critical_radius']
     mask_horizon = masking_config['mask_horizon']
 
     # Cost weights (position, velocity, control)
@@ -427,6 +342,7 @@ if __name__ == "__main__":
         limit_past_horizon=limit_past_horizon,
         masking_method=masking_method,
         top_k=top_k,
+        critical_radius=critical_radius,
         debug=DEBUG,
     )
 
@@ -450,7 +366,7 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=False, gif_interval=50, dump_data=True, simulator=simulator)
+    plotter.plot_all(create_gif=True, gif_interval=50, dump_data=True, simulator=simulator)
     
     # Generate ego agent perspective GIFs
     print("\nGenerating ego agent perspective GIFs...")

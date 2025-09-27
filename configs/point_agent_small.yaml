@@ -15,5 +15,5 @@ simulator:
 
 masking:
   limit_past_horizon: True
-  masking_method: "jacobian"
+  masking_method: "jacobian_top_k"
   top_k: 5

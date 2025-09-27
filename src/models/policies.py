@@ -1,7 +1,6 @@
 import jax.numpy as jnp
-from jax import jit, vmap, grad, lax
 
-def nearest_neighbors(past_x_trajs: jnp.ndarray, top_k: int) -> jnp.ndarray:
+def nearest_neighbors_top_k(past_x_trajs: jnp.ndarray, top_k: int) -> jnp.ndarray:
     n_agents = past_x_trajs.shape[0]
     latest_positions = past_x_trajs[:, -1, :2]
     diff = latest_positions[:, None, :] - latest_positions[None, :, :]
@@ -9,18 +8,24 @@ def nearest_neighbors(past_x_trajs: jnp.ndarray, top_k: int) -> jnp.ndarray:
 
     mask_diag = jnp.eye(n_agents, dtype=bool)
     squared_distances = jnp.where(mask_diag, jnp.inf, squared_distances)
-    # Full sort, then take the first top_k columns (top_k is static for JIT)
-    nearest_indices = jnp.argsort(squared_distances, axis=1)
-    return nearest_indices[:, :top_k]
+    
+    # Get indices of top-k nearest neighbors for each agent
+    nearest_indices = jnp.argsort(squared_distances, axis=1)[:, :top_k]
+    
+    # Convert indices to mask format
+    mask = jnp.zeros((n_agents, n_agents), dtype=jnp.int32)
+    row_indices = jnp.arange(n_agents)[:, None]  # Shape: [n_agents, 1]
+    mask = mask.at[row_indices, nearest_indices].set(1)
+    
+    return mask
 
-def jacobian(
+def jacobian_top_k(
     past_x_trajs: jnp.ndarray,
     top_k: int,
     dt: float,
     w1: float,
     w2: float,
 ) -> jnp.ndarray:
-    # TODO: debug later
     N, T, _ = past_x_trajs.shape
     P = past_x_trajs[..., :2]
     
@@ -33,8 +38,8 @@ def jacobian(
     # build position -> control Jacobian matrix
     k = jnp.arange(T)[:, None]
     t = jnp.arange(T - 1)[None, :]
-    mask = (t < k) & (k > 0)
-    coeff = jnp.where(mask, ((k - 1 - t) + 0.5) * dt * dt, 0.0)
+    mask_time = (t < k) & (k > 0)
+    coeff = jnp.where(mask_time, ((k - 1 - t) + 0.5) * dt * dt, 0.0)
     coeff = coeff[:, :, None]
     grad_slice = grad_pj[..., 1:, :]
     coeff_slice = coeff[1:, :, :]
@@ -45,9 +50,26 @@ def jacobian(
     scores = jnp.sqrt(J_sq)
     scores = scores * (1.0 - jnp.eye(N))
 
-    # find top k scores per row by indices
+    # find top k scores per row by indices (highest scores)
     top_k_indices = jnp.argsort(scores, axis=1)[:, -top_k:]
-    return top_k_indices
+    
+    # Convert indices to mask format
+    mask = jnp.zeros((N, N), dtype=jnp.int32)
+    row_indices = jnp.arange(N)[:, None]  # Shape: [N, 1]
+    mask = mask.at[row_indices, top_k_indices].set(1)
+    
+    return mask
+
+def nearest_neighbors_radius(past_x_trajs: jnp.ndarray, critical_radius: float) -> jnp.ndarray:
+    n_agents = past_x_trajs.shape[0]
+    latest_positions = past_x_trajs[:, -1, :2]  
+    diff = latest_positions[:, None, :] - latest_positions[None, :, :]
+    distances = jnp.sqrt(jnp.sum(diff * diff, axis=2))
+    within_radius_mask = distances <= critical_radius
+    
+    mask_diag = jnp.eye(n_agents, dtype=bool)
+    within_radius_mask = jnp.where(mask_diag, False, within_radius_mask)
+    return within_radius_mask.astype(jnp.int32)
 
 def cost_evolution(past_x_trajs: jnp.ndarray, top_k: int) -> jnp.ndarray:
     pass
@@ -70,7 +92,37 @@ if __name__ == "__main__":
     w1 = 1.0
     w2 = 0.5
     
-    # Call jacobian function
-    print("Testing jacobian function with example data:")
+    # Test all neighbor selection functions
+    print("Testing neighbor selection functions with example data:")
     print(f"past_x_trajs shape: {past_x_trajs.shape}")
-    jacobian(past_x_trajs, top_k, dt, w1, w2)
+    
+    # Test nearest_neighbors_top_k
+    print(f"\n1. Nearest neighbors top-k (k={top_k}):")
+    nn_mask = nearest_neighbors_top_k(past_x_trajs, top_k)
+    print(f"Mask shape: {nn_mask.shape}")
+    print(f"Mask:\n{nn_mask}")
+    
+    # Test jacobian_top_k
+    print(f"\n2. Jacobian top-k (k={top_k}):")
+    jacobian_mask = jacobian_top_k(past_x_trajs, top_k, dt, w1, w2)
+    print(f"Mask shape: {jacobian_mask.shape}")
+    print(f"Mask:\n{jacobian_mask}")
+    
+    # Test nearest_neighbors_radius
+    print(f"\n3. Nearest neighbors radius (radius=1.5):")
+    radius_mask = nearest_neighbors_radius(past_x_trajs, 1.5)
+    print(f"Mask shape: {radius_mask.shape}")
+    print(f"Mask:\n{radius_mask}")
+    
+    # Print final positions for reference
+    final_positions = past_x_trajs[:, -1, :2]
+    print(f"\nFinal agent positions:")
+    for i, pos in enumerate(final_positions):
+        print(f"  Agent {i}: ({pos[0]:.1f}, {pos[1]:.1f})")
+    
+    # Calculate and print actual distances
+    print(f"\nPairwise distances:")
+    for i in range(3):
+        for j in range(i+1, 3):
+            dist = jnp.sqrt(jnp.sum((final_positions[i] - final_positions[j])**2))
+            print(f"  Agent {i} ↔ Agent {j}: {dist:.2f}")
