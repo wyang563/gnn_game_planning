@@ -101,7 +101,9 @@ class Simulator:
         self.ref_trajs = jnp.stack([agent.ref_traj for agent in self.agents])
 
         mask_diag = ~jnp.eye(self.n_agents, dtype=bool)
-        self.other_index = mask_diag.astype(jnp.int32)
+        mask = mask_diag.astype(jnp.int32)
+        self.other_index = mask
+        # self.other_index = jnp.tile(mask[:, None, :], (1, self.horizon, 1))
         
         # metrics we log
         self.all_loss_vals = []
@@ -120,11 +122,11 @@ class Simulator:
                 return dummy_agent.linearize_dyn(x0, u_traj)
             return vmap(single_agent_linearize_dyn)(x0s, u_trajs)
         
-        def batched_linearize_loss(x_trajs, u_trajs, ref_trajs, other_trajs):
+        def batched_linearize_loss(x_trajs, u_trajs, ref_trajs, other_trajs, masks):
             """Batched version of linearize_loss for all agents."""
-            def single_agent_linearize_loss(x_traj, u_traj, ref_traj, other_traj):
-                return dummy_agent.linearize_loss(x_traj, u_traj, ref_traj, other_traj)
-            return vmap(single_agent_linearize_loss)(x_trajs, u_trajs, ref_trajs, other_trajs)
+            def single_agent_linearize_loss(x_traj, u_traj, ref_traj, other_traj, mask):
+                return dummy_agent.linearize_loss(x_traj, u_traj, ref_traj, other_traj, mask)
+            return vmap(single_agent_linearize_loss)(x_trajs, u_trajs, ref_trajs, other_trajs, masks)
         
         def batched_solve(A_trajs, B_trajs, a_trajs, b_trajs):
             """Batched version of solve for all agents."""
@@ -132,11 +134,11 @@ class Simulator:
                 return dummy_agent.solve(A_traj, B_traj, a_traj, b_traj)
             return vmap(single_agent_solve)(A_trajs, B_trajs, a_trajs, b_trajs)
         
-        def batched_loss(x_trajs, u_trajs, ref_trajs, other_trajs):
+        def batched_loss(x_trajs, u_trajs, ref_trajs, other_trajs, masks):
             """Batched version of loss for all agents."""
-            def single_agent_loss(x_traj, u_traj, ref_traj, other_traj):
-                return dummy_agent.loss(x_traj, u_traj, ref_traj, other_traj)
-            return vmap(single_agent_loss)(x_trajs, u_trajs, ref_trajs, other_trajs)
+            def single_agent_loss(x_traj, u_traj, ref_traj, other_traj, mask):
+                return dummy_agent.loss(x_traj, u_traj, ref_traj, other_traj, mask)
+            return vmap(single_agent_loss)(x_trajs, u_trajs, ref_trajs, other_trajs, masks)
         
         # JIT compile the batched functions
         self.jit_batched_linearize_dyn = jit(batched_linearize_dyn, device=self.device)
@@ -220,16 +222,15 @@ class Simulator:
         
         # Step 2: Prepare other player trajectories for each agent
         # Create a 3D array where other_trajs[i] contains trajectories of all other agents for agent i
-        all_x_pos = x_trajs[:, :, :2]
-        # Use the mask to select relevant agents for each agent
-        # other_x_pos[i] will contain trajectories of agents that agent i considers
-        # Expand dimensions to broadcast: all_x_pos[None, :, :, :] * self.other_index[:, :, None, None]
-        # This creates a (n_agents, n_agents, horizon, 2) array where masked agents are zeroed
-        other_x_pos = all_x_pos[None, :, :, :] * self.other_index[:, :, None, None]
-        other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
+        # Use actual horizon length from x_trajs shape, not self.horizon
+        actual_horizon = x_trajs.shape[1]
+        all_x_pos = jnp.broadcast_to(x_trajs[:, :, :2], (self.n_agents, self.n_agents, actual_horizon, 2))
+        other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
 
         # Step 3: solve for all agents
-        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.horizon_u_trajs, self.horizon_rej_trajs, other_trajs_batch)
+        # Slice mask to match actual horizon length
+        mask_for_step = jnp.tile(self.other_index[:, None, :], (1, actual_horizon, 1))
+        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.horizon_u_trajs, self.horizon_rej_trajs, other_x_trajs, mask_for_step)
         v_trajs, _ = self.jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
         
         # Step 4: Update control trajectories
@@ -251,8 +252,7 @@ class Simulator:
                 self.player_masks.append(self.other_index)
                 x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
                 all_x_pos = x_trajs[:, :, :2]
-                other_x_pos = all_x_pos[None, :, :, :] * self.other_index[:, :, None, None]
-                other_trajs_batch = jnp.transpose(other_x_pos, (0, 2, 1, 3))
+
                 min_pairwise_distance = self.global_min_pairwise_distance(all_x_pos, iter_timestep)
                 self.all_min_pairwise_distances.append(min_pairwise_distance)
 
@@ -260,8 +260,18 @@ class Simulator:
                 x_trajs_t = x_trajs[:, iter_timestep:iter_timestep+1, :]
                 u_trajs_t = self.u_trajs[:, iter_timestep:iter_timestep+1, :]
                 ref_trajs_t = self.ref_trajs[:, iter_timestep:iter_timestep+1, :]
-                other_trajs_t = other_trajs_batch[:, iter_timestep:iter_timestep+1, :, :]
-                loss_vals_t = self.jit_batched_loss(x_trajs_t, u_trajs_t, ref_trajs_t, other_trajs_t)
+                
+                # Create other_x_trajs: for each agent, broadcast all agent positions at current timestep
+                # Shape should be (n_agents, 1, n_agents, 2) for batched loss calculation
+                current_positions = all_x_pos[:, iter_timestep, :2]  # Shape: (n_agents, 2)
+                other_trajs_t = jnp.broadcast_to(current_positions[None, None, :, :], (self.n_agents, 1, self.n_agents, 2))
+                
+                # Create masks: (n_agents, 1, n_agents) - exclude self-interaction
+                masks_t = ~jnp.eye(self.n_agents, dtype=bool)
+                masks_t = masks_t.astype(jnp.int32)
+                masks_t = jnp.expand_dims(masks_t, axis=1)  # Shape: (n_agents, 1, n_agents)
+
+                loss_vals_t = self.jit_batched_loss(x_trajs_t, u_trajs_t, ref_trajs_t, other_trajs_t, masks_t)
                 self.all_loss_vals.append(loss_vals_t)
                 if iter_timestep % int(self.time_steps/10) == 0:
                     loss_str = f"iter[{iter_timestep}/{self.time_steps}] | "

@@ -61,26 +61,30 @@ class Agent(iLQR):
         return jnp.array([xt[2], xt[3], ut[0], ut[1]])
     
     # define loss functions
-    def runtime_loss(self, xt, ut, ref_xt, other_xts):
+    def runtime_loss(self, xt, ut, ref_xt, other_xts, mask):
         # calculate collision loss
         current_position = xt[:2]
         squared_distances = jnp.sum(jnp.square(current_position - other_xts), axis=1)
         collision_loss = self.w1 * jnp.exp(-self.w2 * squared_distances)
-        collision_loss = jnp.sum(collision_loss) / other_xts.shape[0]
+        # Apply mask to collision loss, not distance
+        collision_loss = collision_loss * mask
+        # Normalize by number of active agents (sum of mask) instead of total agents
+        num_active_agents = jnp.sum(mask) + 1e-8  # add small epsilon to avoid division by zero
+        collision_loss = jnp.sum(collision_loss) / num_active_agents
 
         ctrl_loss: jnp.ndarray = self.w3 * jnp.sum(jnp.square(ut))
         nav_loss: jnp.ndarray = self.w4 * jnp.sum(jnp.square(xt[:2]-ref_xt[:2]))
         return nav_loss + collision_loss + ctrl_loss
 
-    def loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs):
-        runtime_loss_array = vmap(self.runtime_loss, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs)
+    def loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs, mask):
+        runtime_loss_array = vmap(self.runtime_loss, in_axes=(0, 0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs, mask)
         return runtime_loss_array.sum() * self.dt
 
-    def linearize_loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs):
+    def linearize_loss(self, x_traj, u_traj, ref_x_traj, other_x_trajs, mask):
         dldx = grad(self.runtime_loss, argnums=(0))
         dldu = grad(self.runtime_loss, argnums=(1))
-        a_traj = vmap(dldx, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs)  
-        b_traj = vmap(dldu, in_axes=(0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs) 
+        a_traj = vmap(dldx, in_axes=(0, 0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs, mask)  
+        b_traj = vmap(dldu, in_axes=(0, 0, 0, 0, 0))(x_traj, u_traj, ref_x_traj, other_x_trajs, mask) 
         return a_traj, b_traj
 
     # helpers
