@@ -1,12 +1,10 @@
 # this file adds onto the Simulator class to train models
 import jax
 import jax.numpy as jnp
+import jax.random
 from jax import jit, vmap, grad, value_and_grad
 import optax
-from typing import Tuple, Optional, List, Dict, Any
-from lqrax import iLQR
-from utils.utils import origin_init_collision, random_init, load_config, parse_arguments
-from utils.point_agent_lqr_plots import LQRPlotter
+from utils.utils import load_config, parse_arguments
 from tqdm import tqdm
 from models.policies import *
 from sim_solver import Simulator
@@ -27,6 +25,7 @@ class SimulatorTrain:
             state_dim=kwargs["state_dim"],
             n_agents=kwargs["n_agents"],
             mask_horizon=kwargs["mask_horizon"],
+            random_seed=kwargs["random_seed"]
         )
         
         # Setup optimizer
@@ -38,7 +37,8 @@ class SimulatorTrain:
         model_type: str,
         state_dim: int = 4, 
         n_agents: int = 10, 
-        mask_horizon: int = 10
+        mask_horizon: int = 10,
+        random_seed: int = 42
     ):
         if model_type == "mlp":
             return MLP(
@@ -46,17 +46,31 @@ class SimulatorTrain:
                 mask_horizon=mask_horizon,
                 state_dim=state_dim,
                 hidden_sizes=(256, 64, 16),  # Default architecture from paper
-                random_seed=42
+                random_seed=random_seed
             )
         # TODO: add GNN model later
         else:
             raise ValueError(f"Model type {model_type} not supported")
     
     def _flatten_x_trajs(self, x_trajs):
-        pass
+        n_agents = x_trajs.shape[0]
+        mask_horizon = x_trajs.shape[1]
+        state_dim = x_trajs.shape[2]
+        batch = jnp.broadcast_to(x_trajs, (n_agents, n_agents, mask_horizon, state_dim))
+        
+        result = batch.copy()
+        
+        for i in range(n_agents):
+            temp = result[i, 0].copy()
+            result = result.at[i, 0].set(result[i, i])
+            result = result.at[i, i].set(temp)
+        
+        flattened_batch = result.reshape(n_agents, n_agents * mask_horizon * state_dim)
+        return flattened_batch
 
-    def loss(self, model, past_x_trajs, model_x_trajs, target_x_trajs, sparsity_weight=0.01, binary_weight=0.01):
-        predicted_masks = model(past_x_trajs)
+
+    def loss(self, model, flattened_batch, model_x_trajs, target_x_trajs, sparsity_weight=0.01, binary_weight=0.01):
+        predicted_masks = model(flattened_batch)
         # Trajectory reconstruction loss: L2 distance between model and target trajectories
         trajectory_loss = jnp.mean(jnp.sum((model_x_trajs - target_x_trajs) ** 2, axis=(1, 2)))
         
@@ -103,13 +117,15 @@ class SimulatorTrain:
                 simulator.setup_horizon_arrays(iter_timestep)
                 # run model to get mask
                 past_x_trajs = simulator.get_past_x_trajs(iter_timestep)
-                simulator.other_index = self.model(past_x_trajs)
+                flattened_batch = self._flatten_x_trajs(past_x_trajs)
+                predicted_masks = self.model(flattened_batch)
+                simulator.other_index = predicted_masks
 
                 # calculate trajectory values with model mask applied
                 for _ in range(simulator.optimization_iters):
                     simulator.step()
                 
-                model_x_trajs = simulator.jit_batched_linearize_dyn(simulator.horizon_x0s, simulator.horizon_u_trajs)
+                model_x_trajs, _, _ = simulator.jit_batched_linearize_dyn(simulator.horizon_x0s, simulator.horizon_u_trajs)
                 
                 mask_diag = ~jnp.eye(simulator.n_agents, dtype=bool)
                 simulator.other_index = mask_diag.astype(jnp.int32)
@@ -118,11 +134,11 @@ class SimulatorTrain:
                 for _ in range(simulator.optimization_iters):
                     simulator.step()
 
-                target_x_trajs = simulator.jit_batched_linearize_dyn(simulator.horizon_x0s, simulator.horizon_u_trajs)
+                target_x_trajs, _, _ = simulator.jit_batched_linearize_dyn(simulator.horizon_x0s, simulator.horizon_u_trajs)
                 
                 # Implement PSN Game loss function from section 3.3
                 # Compute loss and gradients
-                loss_fn = lambda model : self.loss(model, past_x_trajs, model_x_trajs, target_x_trajs)
+                loss_fn = lambda model : self.loss(model, flattened_batch, model_x_trajs, target_x_trajs)
                 (total_loss, (trajectory_loss, sparsity_loss, binary_loss)), grads = value_and_grad(loss_fn, has_aux=True)(self.model)
                 
                 # Update model parameters using optimizer
@@ -169,6 +185,7 @@ if __name__ == "__main__":
         "state_dim": training_config["state_dim"],
         "n_agents": simulator_config["n_agents"],
         "mask_horizon": masking_config["mask_horizon"],
+        "random_seed": training_config["random_seed"],
     }
     
     # Parameters needed for Simulator within the training loop

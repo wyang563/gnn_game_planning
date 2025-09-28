@@ -160,10 +160,10 @@ class Simulator:
         self.horizon_rej_trajs = self.ref_trajs[:, start_ind:end_ind, :]
     
     def get_past_x_trajs(self, iter_timestep: int):
-        # get all x_traj data from [iter_timestep - horizon, iter_timestep], pad if the 
+        # get all x_traj data from [iter_timestep - horizon, iter_timestep - 1], pad if the 
         # data ends up being shorter than length horizon
         x_trajs = self.calculate_x_trajs()
-        if self.limit_past_horizon:
+        if not self.limit_past_horizon:
             start_ind = 0
         else:
             start_ind = max(0, iter_timestep - self.mask_horizon)
@@ -171,10 +171,10 @@ class Simulator:
         end_ind = iter_timestep
         traj_slice = x_trajs[:, start_ind:end_ind, :]
         
-        if self.limit_past_horizon:
-            pad_length = self.time_steps - (end_ind - start_ind + 1)
+        if not self.limit_past_horizon:
+            pad_length = self.time_steps - (end_ind - start_ind)
         else:
-            pad_length = self.mask_horizon - (end_ind - start_ind + 1)
+            pad_length = self.mask_horizon - (end_ind - start_ind)
 
         if pad_length > 0:
             padding = jnp.tile(x_trajs[:, start_ind:start_ind+1, :], (1, pad_length, 1))

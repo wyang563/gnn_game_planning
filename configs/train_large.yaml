@@ -25,3 +25,4 @@ training:
   epochs: 10
   learning_rate: 0.001
   state_dim: 4
+  random_seed: 42
