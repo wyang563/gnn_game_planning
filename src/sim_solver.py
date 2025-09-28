@@ -103,7 +103,6 @@ class Simulator:
         mask_diag = ~jnp.eye(self.n_agents, dtype=bool)
         mask = mask_diag.astype(jnp.int32)
         self.other_index = mask
-        # self.other_index = jnp.tile(mask[:, None, :], (1, self.horizon, 1))
         
         # metrics we log
         self.all_loss_vals = []
@@ -235,8 +234,8 @@ class Simulator:
         
         # Step 4: Update control trajectories
         self.horizon_u_trajs += self.step_size * v_trajs
-    
-    def run(self) -> None:
+
+    def run_test(self) -> None:
         for iter_timestep in tqdm(range(self.time_steps)):
             self.setup_horizon_arrays(iter_timestep)
 
@@ -364,7 +363,7 @@ if __name__ == "__main__":
 
     # Run simulation with progress updates
     print("Running simulation...")
-    simulator.run()
+    simulator.run_test()
     
     # Generate plots
     print("\nGenerating visualization plots...")

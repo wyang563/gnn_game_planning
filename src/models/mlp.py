@@ -36,7 +36,7 @@ class MLP(nnx.Module):
         linear2 = nnx.Linear(self.hidden_sizes[0], self.hidden_sizes[1], rngs=rngs)
         linear3 = nnx.Linear(self.hidden_sizes[1], self.hidden_sizes[2], rngs=rngs)
         linear4 = nnx.Linear(self.hidden_sizes[2], self.output_dim, rngs=rngs)
-        self.layers = [linear1, linear2, linear3, linear4]
+        self.layers = nnx.List([linear1, linear2, linear3, linear4])
     
     def forward(self, x: jnp.ndarray) -> jnp.ndarray:
         for i, layer in enumerate(self.layers):
@@ -44,6 +44,7 @@ class MLP(nnx.Module):
                 x = nnx.relu(layer(x))
             else:
                 x = nnx.sigmoid(layer(x))
+        return x
     
     def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
         return self.forward(x)

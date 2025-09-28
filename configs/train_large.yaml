@@ -1,0 +1,27 @@
+simulator:
+  n_agents: 10
+  horizon: 30
+  time_steps: 200
+  dt: 0.05
+  init_arena_range: [-5.0, 5.0]
+  init_type: "origin"
+  goal_threshold: 0.2
+  device: "cuda"
+  optimization_iters: 100
+  step_size: 0.002
+  W: [100.0, 5.0, 0.1, 1.0] # w1 = collision, w2 = collision cost exp decay, w3 = control, w4 = navigation
+  Q: [0.1, 0.1, 0.001, 0.001] # Higher position weights
+  R: [0.01, 0.01]
+
+masking:
+  limit_past_horizon: True
+  mask_horizon: 10
+  masking_method: "mlp"
+  top_k: 5
+  critical_radius: 2.0
+
+training:
+  model_type: "mlp"
+  epochs: 10
+  learning_rate: 0.001
+  state_dim: 4

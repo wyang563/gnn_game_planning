@@ -1,7 +1,8 @@
 # this file adds onto the Simulator class to train models
 import jax
 import jax.numpy as jnp
-from jax import jit, vmap, grad
+from jax import jit, vmap, grad, value_and_grad
+import optax
 from typing import Tuple, Optional, List, Dict, Any
 from lqrax import iLQR
 from utils.utils import origin_init_collision, random_init, load_config, parse_arguments
@@ -14,44 +15,195 @@ from models.mlp import MLP
 # Configure JAX to use float32 by default for better performance
 jax.config.update("jax_default_dtype_bits", "32")
 
-class SimulatorTrain(Simulator):
+class SimulatorTrain:
     def __init__(
         self,
         **kwargs
     ):
-        super().__init__(
-            n_agents=kwargs["n_agents"],
-            Q=kwargs["Q"],
-            R=kwargs["R"],
-            W=kwargs["W"],
-            time_steps=kwargs["time_steps"],
-            horizon=kwargs["horizon"],
-            mask_horizon=kwargs["mask_horizon"],
-            dt=kwargs["dt"],
-            init_arena_range=kwargs["init_arena_range"],
-            device=kwargs["device"],
-            goal_threshold=kwargs["goal_threshold"],
-            optimization_iters=kwargs["optimization_iters"],
-            step_size=kwargs["step_size"],
-            init_type=kwargs["init_type"],
-            limit_past_horizon=kwargs["limit_past_horizon"],
-            masking_method=kwargs["masking_method"],
-            top_k=kwargs["top_k"],
-            critical_radius=kwargs["critical_radius"],
-            debug=kwargs["debug"],
-        )
         self.epochs = kwargs["epochs"]
-        self.model = self._setup_model(model_type=kwargs["model_type"])
+        self.learning_rate = kwargs.get("learning_rate", 0.001)
+        self.model = self._setup_model(
+            model_type=kwargs["model_type"], 
+            state_dim=kwargs["state_dim"],
+            n_agents=kwargs["n_agents"],
+            mask_horizon=kwargs["mask_horizon"],
+        )
+        
+        # Setup optimizer
+        self.optimizer = optax.adam(self.learning_rate)
+        self.opt_state = self.optimizer.init(self.model)
 
-    def _setup_model(self, model_type: str):
+    def _setup_model(
+        self,
+        model_type: str,
+        state_dim: int = 4, 
+        n_agents: int = 10, 
+        mask_horizon: int = 10
+    ):
         if model_type == "mlp":
             return MLP(
-                n_agents=self.n_agents,
-                mask_horizon=self.mask_horizon,
-                state_dim=self.state_dim,
+                n_agents=n_agents,
+                mask_horizon=mask_horizon,
+                state_dim=state_dim,
+                hidden_sizes=(256, 64, 16),  # Default architecture from paper
+                random_seed=42
             )
+        # TODO: add GNN model later
         else:
-            raise ValueError(f"Model type {self.model_type} not supported")
-
-    def train(self):
+            raise ValueError(f"Model type {model_type} not supported")
+    
+    def _flatten_x_trajs(self, x_trajs):
         pass
+
+    def loss(self, model, past_x_trajs, model_x_trajs, target_x_trajs, sparsity_weight=0.01, binary_weight=0.01):
+        predicted_masks = model(past_x_trajs)
+        # Trajectory reconstruction loss: L2 distance between model and target trajectories
+        trajectory_loss = jnp.mean(jnp.sum((model_x_trajs - target_x_trajs) ** 2, axis=(1, 2)))
+        
+        # Sparsity regularization: L1 penalty on predicted masks
+        sparsity_loss = sparsity_weight * jnp.mean(jnp.sum(predicted_masks, axis=1))
+        
+        # Binary regularization: Enforces mask values to be either 0 or 1
+        # L_Binary = Σ(j=1 to N) |0.5 - |0.5 - m^{ij}|| (from paper formula)
+        # This encourages values to be close to 0 or 1, with maximum penalty at 0.5
+        binary_loss = binary_weight * jnp.mean(jnp.sum(jnp.abs(0.5 - jnp.abs(0.5 - predicted_masks)), axis=1))
+        
+        total_loss = trajectory_loss + sparsity_loss + binary_loss
+        return total_loss, (trajectory_loss, sparsity_loss, binary_loss)
+
+    def train(self, **kwargs):
+        for epoch in range(self.epochs):
+            print(f"Training epoch {epoch}")
+
+            # initiate new instance of simulator
+            simulator = Simulator(
+                n_agents=kwargs["n_agents"],
+                Q=kwargs["Q"],
+                R=kwargs["R"],
+                W=kwargs["W"],
+                time_steps=kwargs["time_steps"],
+                horizon=kwargs["horizon"],
+                mask_horizon=kwargs["mask_horizon"],
+                dt=kwargs["dt"],
+                init_arena_range=kwargs["init_arena_range"],
+                device=kwargs["device"],
+                goal_threshold=kwargs["goal_threshold"],
+                optimization_iters=kwargs["optimization_iters"],
+                step_size=kwargs["step_size"],
+                init_type=kwargs["init_type"],
+                limit_past_horizon=kwargs["limit_past_horizon"],
+                masking_method=kwargs["masking_method"],
+                top_k=kwargs["top_k"],
+                critical_radius=kwargs["critical_radius"],
+                debug=kwargs["debug"],
+            )
+
+            # run full loop through simulator
+            for iter_timestep in tqdm(range(simulator.time_steps)):
+                simulator.setup_horizon_arrays(iter_timestep)
+                # run model to get mask
+                past_x_trajs = simulator.get_past_x_trajs(iter_timestep)
+                simulator.other_index = self.model(past_x_trajs)
+
+                # calculate trajectory values with model mask applied
+                for _ in range(simulator.optimization_iters):
+                    simulator.step()
+                
+                model_x_trajs = simulator.jit_batched_linearize_dyn(simulator.horizon_x0s, simulator.horizon_u_trajs)
+                
+                mask_diag = ~jnp.eye(simulator.n_agents, dtype=bool)
+                simulator.other_index = mask_diag.astype(jnp.int32)
+
+                # calculate loss values with all agents
+                for _ in range(simulator.optimization_iters):
+                    simulator.step()
+
+                target_x_trajs = simulator.jit_batched_linearize_dyn(simulator.horizon_x0s, simulator.horizon_u_trajs)
+                
+                # Implement PSN Game loss function from section 3.3
+                # Compute loss and gradients
+                loss_fn = lambda model : self.loss(model, past_x_trajs, model_x_trajs, target_x_trajs)
+                (total_loss, (trajectory_loss, sparsity_loss, binary_loss)), grads = value_and_grad(loss_fn, has_aux=True)(self.model)
+                
+                # Update model parameters using optimizer
+                updates, self.opt_state = self.optimizer.update(grads, self.opt_state)
+                self.model = optax.apply_updates(self.model, updates)
+                
+                if iter_timestep % 20 == 0:  # Print loss every 10 timesteps
+                    print(f"Epoch {epoch}, Timestep {iter_timestep}: "
+                          f"Trajectory Loss: {trajectory_loss:.6f}, "
+                          f"Sparsity Loss: {sparsity_loss:.6f}, "
+                          f"Binary Loss: {binary_loss:.6f}, "
+                          f"Total Loss: {total_loss:.6f}")
+                
+if __name__ == "__main__":
+    DEBUG = True
+
+    # Parse command line arguments
+    args = parse_arguments()
+    
+    # Load configuration from YAML file
+    try:
+        config = load_config(args.config)
+        print(f"=== Testing Receding Horizon Nash Game Simulator ===")
+        print(f"Using config file: {args.config}")
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        exit(1)
+    
+    # Extract config parameters and set up SimulatorTrain
+    simulator_config = config["simulator"]
+    masking_config = config["masking"]
+    training_config = config["training"]
+
+    Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
+    R = jnp.diag(jnp.array(simulator_config['R']))
+    W = jnp.array(simulator_config['W'])  # w1 = collision, w2 = collision cost exp decay, w3 = control, w4 = navigation
+    
+    # Combine all config parameters needed for SimulatorTrain initialization
+    train_params = {
+        # Training-specific parameters for SimulatorTrain constructor
+        "epochs": training_config["epochs"],
+        "learning_rate": training_config["learning_rate"],
+        "model_type": training_config["model_type"],
+        "state_dim": training_config["state_dim"],
+        "n_agents": simulator_config["n_agents"],
+        "mask_horizon": masking_config["mask_horizon"],
+    }
+    
+    # Parameters needed for Simulator within the training loop
+    simulator_params = {
+        # Simulator parameters
+        "n_agents": simulator_config["n_agents"],
+        "horizon": simulator_config["horizon"],
+        "time_steps": simulator_config["time_steps"],
+        "dt": simulator_config["dt"],
+        "init_arena_range": simulator_config["init_arena_range"],
+        "init_type": simulator_config["init_type"],
+        "goal_threshold": simulator_config["goal_threshold"],
+        "device": simulator_config["device"],
+        "optimization_iters": simulator_config["optimization_iters"],
+        "step_size": simulator_config["step_size"],
+        "W": W,
+        "Q": Q,
+        "R": R,
+        
+        # Masking parameters
+        "limit_past_horizon": masking_config["limit_past_horizon"],
+        "mask_horizon": masking_config["mask_horizon"],
+        "masking_method": masking_config["masking_method"],
+        "top_k": masking_config["top_k"],
+        "critical_radius": masking_config["critical_radius"],
+        
+        # Debug parameter (not in YAML, set from constant)
+        "debug": DEBUG,
+    }
+    
+    # Initialize SimulatorTrain
+    print("Initializing SimulatorTrain...")
+    trainer = SimulatorTrain(**train_params)
+    
+    # Start training
+    print("Starting training...")
+    trainer.train(**simulator_params)
+
