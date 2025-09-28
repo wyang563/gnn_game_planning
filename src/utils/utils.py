@@ -17,8 +17,8 @@ def origin_init_collision(n_agents: int,
     min_pos, max_pos = init_position_range
     pos_range = max_pos - min_pos
     
-    # Minimum distance between agents to avoid initial collisions
-    min_distance = 0.5 * pos_range / n_agents  # Scale with number of agents
+    # Minimum distance between agents to avoid initial collisions (at least 1 unit)
+    min_distance = max(1.0, 0.5 * pos_range / n_agents)
     
     max_tries = 1000
     
@@ -85,13 +85,33 @@ def origin_init_collision(n_agents: int,
             goals.append(goal)
             continue
 
-        # Prefer c around 1 with slight randomness, then clamp into [c_lower, c_upper]
-        desired_c = 1.0 + random.uniform(-0.2, 0.2)
-        # Keep a tiny margin inside bounds to avoid floating point boundary hits
-        margin = 1e-6
-        c = min(max(desired_c, c_lower + margin), c_upper - margin)
+        # Try to find a goal that is at least min_distance from other goals
+        goal = None
+        for _ in range(max_tries):
+            # Prefer c around 1 with slight randomness, then clamp into [c_lower, c_upper]
+            desired_c = 1.0 + random.uniform(-0.2, 0.2)
+            # Keep a tiny margin inside bounds to avoid floating point boundary hits
+            margin = 1e-6
+            c = min(max(desired_c, c_lower + margin), c_upper - margin)
 
-        goal = -c * jnp.array([x0, y0])
+            candidate_goal = -c * jnp.array([x0, y0])
+            
+            # Check minimum distance from other goals
+            too_close = False
+            for existing_goal in goals:
+                distance = jnp.linalg.norm(candidate_goal - existing_goal)
+                if distance < min_distance:
+                    too_close = True
+                    break
+            
+            if not too_close:
+                goal = candidate_goal
+                break
+        
+        # If we couldn't find a valid goal after max_tries, use the last candidate
+        if goal is None:
+            goal = candidate_goal
+        
         goals.append(goal)
     
     return init_ps, goals
@@ -132,8 +152,8 @@ def random_init(n_agents: int,
     min_pos, max_pos = init_position_range
     pos_range = max_pos - min_pos
     
-    # Minimum distance between agents (0.05 * init_range_x)
-    min_distance = 0.03 * pos_range
+    # Minimum distance between agents and goals (at least 1 unit)
+    min_distance = max(1.0, 0.5 * pos_range / n_agents)
     
     max_tries = 1000
     
