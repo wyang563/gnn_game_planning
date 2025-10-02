@@ -68,7 +68,6 @@ class SimulatorTrain:
         flattened_batch = result.reshape(n_agents, n_agents * mask_horizon * state_dim)
         return flattened_batch
 
-
     def loss(self, model, flattened_batch, model_x_trajs, target_x_trajs, sparsity_weight=0.01, binary_weight=0.01):
         predicted_masks = model(flattened_batch)
         # Trajectory reconstruction loss: L2 distance between model and target trajectories

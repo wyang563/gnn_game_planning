@@ -149,20 +149,27 @@ class Simulator:
         x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
         return x_trajs
 
-    def setup_horizon_arrays(self, iter_timestep: int):
+    def setup_horizon_arrays(self, x_trajs: jnp.ndarray, iter_timestep: int):
         # calculate x0s, u_trajs, ref_trajs starting at a given timestep 
         # to prepare for horizon optimization calculations 
-        x_trajs = self.calculate_x_trajs()
+        # x_trajs = self.calculate_x_trajs()
         self.horizon_x0s = x_trajs[:, iter_timestep]
         start_ind = iter_timestep 
         end_ind = min(start_ind + self.horizon, self.time_steps)
-        self.horizon_u_trajs = jnp.zeros((self.n_agents, end_ind - start_ind, 2))
-        self.horizon_rej_trajs = self.ref_trajs[:, start_ind:end_ind, :]
+        actual_horizon = end_ind - start_ind
+        self.horizon_u_trajs = jnp.zeros((self.n_agents, self.horizon, 2))
+        
+        last_ref = self.ref_trajs[:, -1:, :]  # Shape: (n_agents, 1, 2)
+        self.horizon_rej_trajs = jnp.tile(last_ref, (1, self.horizon, 1))  # Shape: (n_agents, horizon, 2)
+        
+        self.horizon_rej_trajs = self.horizon_rej_trajs.at[:, :actual_horizon, :].set(
+            self.ref_trajs[:, start_ind:end_ind, :]
+        )
     
-    def get_past_x_trajs(self, iter_timestep: int):
+    def get_past_x_trajs(self, x_trajs: jnp.ndarray, iter_timestep: int):
         # get all x_traj data from [iter_timestep - horizon, iter_timestep - 1], pad if the 
         # data ends up being shorter than length horizon
-        x_trajs = self.calculate_x_trajs()
+        # x_trajs = self.calculate_x_trajs()
         if not self.limit_past_horizon:
             start_ind = 0
         else:
@@ -202,8 +209,8 @@ class Simulator:
         min_d2 = jnp.min(masked_d2)
         return jnp.sqrt(min_d2)
 
-    def run_masking_method(self, masking_method: str, iter_timestep: int):
-        past_x_trajs = self.get_past_x_trajs(iter_timestep)
+    def run_masking_method(self, masking_method: str, iter_timestep: int, x_trajs: jnp.ndarray):
+        past_x_trajs = self.get_past_x_trajs(x_trajs, iter_timestep)
         if masking_method == "nearest_neighbors_top_k":
             self.other_index = nearest_neighbors_top_k(past_x_trajs, top_k=self.top_k)
         elif masking_method == "jacobian_top_k":
@@ -221,26 +228,26 @@ class Simulator:
         
         # Step 2: Prepare other player trajectories for each agent
         # Create a 3D array where other_trajs[i] contains trajectories of all other agents for agent i
-        # Use actual horizon length from x_trajs shape, not self.horizon
-        actual_horizon = x_trajs.shape[1]
-        all_x_pos = jnp.broadcast_to(x_trajs[:, :, :2], (self.n_agents, self.n_agents, actual_horizon, 2))
+        # Always use self.horizon for shape consistency (avoid JIT recompilation)
+        all_x_pos = jnp.broadcast_to(x_trajs[:, :, :2], (self.n_agents, self.n_agents, self.horizon, 2))
         other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
 
         # Step 3: solve for all agents
-        # Slice mask to match actual horizon length
-        mask_for_step = jnp.tile(self.other_index[:, None, :], (1, actual_horizon, 1))
+        # Use fixed horizon shape for mask
+        mask_for_step = jnp.tile(self.other_index[:, None, :], (1, self.horizon, 1))
         a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.horizon_u_trajs, self.horizon_rej_trajs, other_x_trajs, mask_for_step)
         v_trajs, _ = self.jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
         
-        # Step 4: Update control trajectories
+        # Step 4: Update control trajectories (only the valid portion if near the end)
         self.horizon_u_trajs += self.step_size * v_trajs
 
     def run_test(self) -> None:
         for iter_timestep in tqdm(range(self.time_steps)):
-            self.setup_horizon_arrays(iter_timestep)
+            x_trajs = self.calculate_x_trajs()
+            self.setup_horizon_arrays(x_trajs, iter_timestep)
 
             # calculate mask of other agents to consider for each agent
-            self.run_masking_method(self.masking_method, iter_timestep)
+            self.run_masking_method(self.masking_method, iter_timestep, x_trajs)
 
             # run optimization for horizon trajectory
             for _ in range(self.optimization_iters):
