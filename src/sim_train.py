@@ -31,6 +31,8 @@ class SimulatorTrain:
         # Setup optimizer
         self.optimizer = optax.adam(self.learning_rate)
         self.opt_state = self.optimizer.init(self.model)
+        self.sigma_1 = kwargs["sigma_1"]
+        self.sigma_2 = kwargs["sigma_2"]
 
     def _setup_model(
         self,
@@ -68,21 +70,8 @@ class SimulatorTrain:
         flattened_batch = result.reshape(n_agents, n_agents * mask_horizon * state_dim)
         return flattened_batch
 
-    def loss(self, model, flattened_batch, model_x_trajs, target_x_trajs, sparsity_weight=0.01, binary_weight=0.01):
-        predicted_masks = model(flattened_batch)
-        # Trajectory reconstruction loss: L2 distance between model and target trajectories
-        trajectory_loss = jnp.mean(jnp.sum((model_x_trajs - target_x_trajs) ** 2, axis=(1, 2)))
-        
-        # Sparsity regularization: L1 penalty on predicted masks
-        sparsity_loss = sparsity_weight * jnp.mean(jnp.sum(predicted_masks, axis=1))
-        
-        # Binary regularization: Enforces mask values to be either 0 or 1
-        # L_Binary = Σ(j=1 to N) |0.5 - |0.5 - m^{ij}|| (from paper formula)
-        # This encourages values to be close to 0 or 1, with maximum penalty at 0.5
-        binary_loss = binary_weight * jnp.mean(jnp.sum(jnp.abs(0.5 - jnp.abs(0.5 - predicted_masks)), axis=1))
-        
-        total_loss = trajectory_loss + sparsity_loss + binary_loss
-        return total_loss, (trajectory_loss, sparsity_loss, binary_loss)
+    def loss(self, model, flattened_batch, model_x_trajs, target_x_trajs):
+        pass
 
     def train(self, **kwargs):
         for epoch in range(self.epochs):
@@ -113,9 +102,10 @@ class SimulatorTrain:
 
             # run full loop through simulator
             for iter_timestep in tqdm(range(simulator.time_steps)):
-                simulator.setup_horizon_arrays(iter_timestep)
+                x_trajs = simulator.calculate_x_trajs()
+                simulator.setup_horizon_arrays(x_trajs, iter_timestep)
                 # run model to get mask
-                past_x_trajs = simulator.get_past_x_trajs(iter_timestep)
+                past_x_trajs = simulator.get_past_x_trajs(x_trajs, iter_timestep)
                 flattened_batch = self._flatten_x_trajs(past_x_trajs)
                 predicted_masks = self.model(flattened_batch)
                 simulator.other_index = predicted_masks
@@ -129,6 +119,8 @@ class SimulatorTrain:
                 mask_diag = ~jnp.eye(simulator.n_agents, dtype=bool)
                 simulator.other_index = mask_diag.astype(jnp.int32)
 
+                # need to reset simulator.horizon_u_trajs
+
                 # calculate loss values with all agents
                 for _ in range(simulator.optimization_iters):
                     simulator.step()
@@ -137,19 +129,8 @@ class SimulatorTrain:
                 
                 # Implement PSN Game loss function from section 3.3
                 # Compute loss and gradients
-                loss_fn = lambda model : self.loss(model, flattened_batch, model_x_trajs, target_x_trajs)
-                (total_loss, (trajectory_loss, sparsity_loss, binary_loss)), grads = value_and_grad(loss_fn, has_aux=True)(self.model)
-                
-                # Update model parameters using optimizer
-                updates, self.opt_state = self.optimizer.update(grads, self.opt_state)
-                self.model = optax.apply_updates(self.model, updates)
-                
-                if iter_timestep % 20 == 0:  # Print loss every 10 timesteps
-                    print(f"Epoch {epoch}, Timestep {iter_timestep}: "
-                          f"Trajectory Loss: {trajectory_loss:.6f}, "
-                          f"Sparsity Loss: {sparsity_loss:.6f}, "
-                          f"Binary Loss: {binary_loss:.6f}, "
-                          f"Total Loss: {total_loss:.6f}")
+
+                # update u_trajs
                 
 if __name__ == "__main__":
     DEBUG = True
@@ -185,6 +166,8 @@ if __name__ == "__main__":
         "n_agents": simulator_config["n_agents"],
         "mask_horizon": masking_config["mask_horizon"],
         "random_seed": training_config["random_seed"],
+        "sigma_1": training_config["sigma_1"],
+        "sigma_2": training_config["sigma_2"],
     }
     
     # Parameters needed for Simulator within the training loop

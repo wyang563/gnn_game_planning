@@ -67,9 +67,13 @@ class Agent(iLQR):
         squared_distances = jnp.sum(jnp.square(current_position - other_xts), axis=1)
         collision_loss = self.w1 * jnp.exp(-self.w2 * squared_distances)
         # Apply mask to collision loss, not distance
-        collision_loss = collision_loss * mask
+        # differentiably clamp values to close to 0 or 1 using formula: 0.5 * (1 + tanh(10 * (mask - 0.5)))
+        eps = 1e-8
+        z = 10 * (mask - 0.5) 
+        modified_mask = 0.5 * (1.0 + jnp.tanh(z))
+        collision_loss = collision_loss * modified_mask 
         # Normalize by number of active agents (sum of mask) instead of total agents
-        num_active_agents = jnp.sum(mask) + 1e-8  # add small epsilon to avoid division by zero
+        num_active_agents = jnp.sum(modified_mask) + eps 
         collision_loss = jnp.sum(collision_loss) / num_active_agents
 
         ctrl_loss: jnp.ndarray = self.w3 * jnp.sum(jnp.square(ut))
@@ -106,3 +110,52 @@ class Agent(iLQR):
     def check_convergence(self) -> bool:
         final_x_pos = self.calculate_x_traj()[-1, :2]
         return jnp.linalg.norm(final_x_pos - self.goal) < self.goal_threshold
+
+
+if __name__ == "__main__":
+    # Quick manual test for runtime_loss
+    dt = 0.1
+    x_dim = 4
+    u_dim = 2
+    Q = jnp.eye(x_dim)
+    R = jnp.eye(u_dim)
+    W = jnp.array([1.0, 1.0, 0.1, 0.5], dtype=jnp.float32)
+    horizon = 5
+    time_steps = 5
+    x0 = jnp.array([0.0, 0.0, 0.0, 0.0], dtype=jnp.float32)
+    u_traj = jnp.zeros((time_steps, u_dim), dtype=jnp.float32)
+    goal = jnp.array([1.0, 1.0], dtype=jnp.float32)
+
+    agent = Agent(
+        id=0,
+        dt=dt,
+        x_dim=x_dim,
+        u_dim=u_dim,
+        Q=Q,
+        R=R,
+        W=W,
+        horizon=horizon,
+        time_steps=time_steps,
+        x0=x0,
+        u_traj=u_traj,
+        goal=goal,
+        device=None,
+    )
+
+    xt = jnp.array([0.2, 0.3, 0.0, 0.0], dtype=jnp.float32)
+    ut = jnp.array([0.0, 0.0], dtype=jnp.float32)
+    ref_xt = jnp.array([0.25, 0.35, 0.0, 0.0], dtype=jnp.float32)
+    other_xts = jnp.array(
+        [
+            [0.2, 0.3],   # very close
+            [1.2, 1.3],   # moderate distance
+            [10.0, 10.0], # far away
+        ],
+        dtype=jnp.float32,
+    )
+    mask = jnp.array([0.9, 0.11, 0.87], dtype=jnp.float32)
+
+    # Run without JIT for clearer debugging behavior
+    with jax.disable_jit():
+        loss_val = agent.runtime_loss(xt, ut, ref_xt, other_xts, mask)
+        print("runtime_loss (manual test):", loss_val)

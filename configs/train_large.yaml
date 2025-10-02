@@ -26,3 +26,5 @@ training:
   learning_rate: 0.001
   state_dim: 4
   random_seed: 42
+  sigma_1: 1.5 # weight for sparsity |M| / N for loss in NN
+  sigma_2: 11 # weight for trajectory loss in NN
