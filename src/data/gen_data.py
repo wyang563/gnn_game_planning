@@ -45,15 +45,18 @@ if __name__ == "__main__":
 
 
     # CHANGE THESE: gen_data_configs
-    num_runs = 50
+    num_runs = 2
     model_type = "mlp"
+    mode = "test"
     gen_data_configs = None
 
     if model_type == "mlp":
         gen_data_configs = {
             "model_type": model_type,
-            "inputs_file": f"src/data/mlp_n_agents_{N}_inputs_test.zarr",
-            "targets_file": f"src/data/mlp_n_agents_{N}_targets_test.zarr",
+            "inputs_file": f"src/data/mlp_n_agents_{N}_{mode}/inputs_{mode}.zarr",
+            "x0s_file": f"src/data/mlp_n_agents_{N}_{mode}/x0s_{mode}.zarr",
+            "ref_trajs_file": f"src/data/mlp_n_agents_{N}_{mode}/ref_trajs_{mode}.zarr",
+            "targets_file": f"src/data/mlp_n_agents_{N}_{mode}/targets_{mode}.zarr",
         }
     elif model_type == "gnn":
         raise NotImplementedError("GNN data generation not implemented yet")
@@ -61,7 +64,7 @@ if __name__ == "__main__":
     # Create simulator    
     for _ in range(num_runs):
         # change arena size to be random sized
-        mag_size = random.uniform(5.0, 10.0)
+        mag_size = random.uniform(3.0, 5.0)
         init_arena_range = (-mag_size, mag_size)
 
         simulator = Simulator(

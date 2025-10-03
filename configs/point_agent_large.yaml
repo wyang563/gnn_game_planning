@@ -1,10 +1,10 @@
 simulator:
   n_agents: 10
   horizon: 30
-  time_steps: 200
+  time_steps: 250
   dt: 0.05
-  init_arena_range: [-5.0, 5.0]
-  init_type: "origin"
+  init_arena_range: [-3.0, 3.0]
+  init_type: "random"
   goal_threshold: 0.2
   device: "cuda"
   optimization_iters: 100
@@ -16,6 +16,6 @@ simulator:
 masking:
   limit_past_horizon: True
   mask_horizon: 10
-  masking_method: "jacobian_top_k"
+  masking_method: "None"
   top_k: 5
   critical_radius: 2.0

@@ -1,10 +1,11 @@
 # dataset and training logs
 src/data/vci-dataset-citr
-src/data/mlp*
+src/data/mlp_n_agents_*
 src/data/gnn*
 logs
 example_files
 *outputs*
+*old*
 
 # cache files
 *.egg-info

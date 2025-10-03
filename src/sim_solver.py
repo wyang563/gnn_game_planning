@@ -163,9 +163,9 @@ class Simulator:
         self.horizon_u_trajs = jnp.zeros((self.n_agents, self.horizon, 2))
         
         last_ref = self.ref_trajs[:, -1:, :]  # Shape: (n_agents, 1, 2)
-        self.horizon_rej_trajs = jnp.tile(last_ref, (1, self.horizon, 1))  # Shape: (n_agents, horizon, 2)
+        self.horizon_ref_trajs = jnp.tile(last_ref, (1, self.horizon, 1))  # Shape: (n_agents, horizon, 2)
         
-        self.horizon_rej_trajs = self.horizon_rej_trajs.at[:, :actual_horizon, :].set(
+        self.horizon_ref_trajs = self.horizon_ref_trajs.at[:, :actual_horizon, :].set(
             self.ref_trajs[:, start_ind:end_ind, :]
         )
     
@@ -250,21 +250,39 @@ class Simulator:
         # Open or create a Zarr array at the given path and append along axis 0
         try:
             arr = zarr.open_array(out_file, mode='r+')
-            # If array exists but feature dim mismatches, raise for clarity
-            if arr.ndim != 2 or arr.shape[1] != batch_np.shape[1]:
+            # If array exists but dimensions mismatch, raise for clarity
+            if arr.ndim != batch_np.ndim:
+                raise ValueError(
+                    f"Dimension mismatch: existing array has {arr.ndim}D, incoming data has {batch_np.ndim}D"
+                )
+            # Check if all dimensions except the first (batch) dimension match
+            if arr.shape[1:] != batch_np.shape[1:]:
                 raise ValueError(
                     f"Feature dimension mismatch: existing array shape {arr.shape}, incoming {batch_np.shape}"
                 )
         except:
-            feature_dim = int(batch_np.shape[1])
+            # Create new array with appropriate shape
+            if batch_np.ndim == 2:
+                # 2D case: (batch_size, feature_dim)
+                feature_dims = (int(batch_np.shape[1]),)
+                initial_shape = (0,) + feature_dims
+                chunk_shape = (min(1024, max(1, batch_np.shape[0])),) + feature_dims
+            elif batch_np.ndim == 3:
+                # 3D case: (batch_size, dim1, dim2)
+                feature_dims = (int(batch_np.shape[1]), int(batch_np.shape[2]))
+                initial_shape = (0,) + feature_dims
+                chunk_shape = (min(1024, max(1, batch_np.shape[0])),) + feature_dims
+            else:
+                raise ValueError(f"Unsupported data dimensionality: {batch_np.ndim}D. Only 2D and 3D data are supported.")
+            
             parent = os.path.dirname(out_file)
             if parent and not os.path.exists(parent):
                 os.makedirs(parent, exist_ok=True)
             arr = zarr.open_array(
                 out_file,
                 mode='w',
-                shape=(0, feature_dim),
-                chunks=(min(1024, max(1, batch_np.shape[0])), feature_dim),
+                shape=initial_shape,
+                chunks=chunk_shape,
                 dtype='float32',
                 fill_value=0.0,
                 config={'write_empty_chunks': False},
@@ -273,8 +291,9 @@ class Simulator:
         # Append by resizing first axis and writing the new slice
         old_n = int(arr.shape[0])
         new_n = old_n + int(batch_np.shape[0])
-        arr.resize((new_n, arr.shape[1]))
-        arr[old_n:new_n, :] = batch_np
+        new_shape = (new_n,) + arr.shape[1:]
+        arr.resize(new_shape)
+        arr[old_n:new_n] = batch_np
 
     def step(self) -> None:
         # Step 1: Batched linearize dynamics for all agents
@@ -289,7 +308,7 @@ class Simulator:
         # Step 3: solve for all agents
         # Use fixed horizon shape for mask
         mask_for_step = jnp.tile(self.other_index[:, None, :], (1, self.horizon, 1))
-        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.horizon_u_trajs, self.horizon_rej_trajs, other_x_trajs, mask_for_step)
+        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.horizon_u_trajs, self.horizon_ref_trajs, other_x_trajs, mask_for_step)
         v_trajs, _ = self.jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
         
         # Step 4: Update control trajectories (only the valid portion if near the end)
@@ -309,6 +328,8 @@ class Simulator:
                 if gen_data_configs['model_type'] == 'mlp':
                     past_x_trajs_flattened = self._flatten_x_trajs(past_x_trajs)
                     self.save_mlp_dataset(past_x_trajs_flattened, gen_data_configs['inputs_file'])
+                    self.save_mlp_dataset(self.horizon_x0s, gen_data_configs['x0s_file'])
+                    self.save_mlp_dataset(self.horizon_ref_trajs, gen_data_configs['ref_trajs_file'])
                 elif gen_data_configs['model_type'] == 'gnn':
                     raise NotImplementedError("GNN data generation not implemented yet")
 
@@ -352,12 +373,11 @@ class Simulator:
             # update u_trajs
             self.u_trajs = self.u_trajs.at[:, iter_timestep, :].set(self.horizon_u_trajs[:, 0, :])
 
-            # write out data if generating data
+            # write out data for trajectories we took over horizon
             if gen_data:
-                x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
-                x_trajs_t = x_trajs[:, iter_timestep:iter_timestep+1, :].squeeze(axis=1)
+                horizon_x_trajs, _, _ = self.jit_batched_linearize_dyn(self.horizon_x0s, self.horizon_u_trajs)
                 if gen_data_configs['model_type'] == 'mlp':
-                    self.save_mlp_dataset(x_trajs_t, gen_data_configs['targets_file'])
+                    self.save_mlp_dataset(horizon_x_trajs, gen_data_configs['targets_file'])
                 elif gen_data_configs['model_type'] == 'gnn':
                     raise NotImplementedError("GNN data generation not implemented yet")
         
@@ -455,9 +475,9 @@ if __name__ == "__main__":
     
     # Generate all static plots and optionally create GIF
     # Set create_gif=True to generate trajectory animation
-    plotter.plot_all(create_gif=True, gif_interval=50, dump_data=True, simulator=simulator)
+    plotter.plot_all(create_gif=False, gif_interval=50, dump_data=True, simulator=simulator)
     
     # Generate ego agent perspective GIFs
-    print("\nGenerating ego agent perspective GIFs...")
-    plotter.create_ego_agent_gif(simulator, timestep_interval=20, interval=100)
+    # print("\nGenerating ego agent perspective GIFs...")
+    # plotter.create_ego_agent_gif(simulator, timestep_interval=20, interval=100)
     
