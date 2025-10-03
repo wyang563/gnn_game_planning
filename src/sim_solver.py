@@ -8,6 +8,9 @@ from utils.point_agent_lqr_plots import LQRPlotter
 from tqdm import tqdm
 from models.policies import *
 from agent import Agent
+import zarr
+import numpy as np
+import os
 
 # Configure JAX to use float32 by default for better performance
 jax.config.update("jax_default_dtype_bits", "32")
@@ -221,6 +224,57 @@ class Simulator:
             pass
         else:
             raise ValueError(f"Invalid masking method: {masking_method}")
+        return past_x_trajs # do this so we can use them if we are collecting data
+    
+    # dataset creation helper methods
+    def _flatten_x_trajs(self, x_trajs):
+        n_agents = x_trajs.shape[0]
+        mask_horizon = x_trajs.shape[1]
+        state_dim = x_trajs.shape[2]
+        batch = jnp.broadcast_to(x_trajs, (n_agents, n_agents, mask_horizon, state_dim))
+        
+        result = batch.copy()
+        
+        for i in range(n_agents):
+            temp = result[i, 0].copy()
+            result = result.at[i, 0].set(result[i, i])
+            result = result.at[i, i].set(temp)
+        
+        flattened_batch = result.reshape(n_agents, n_agents * mask_horizon * state_dim)
+        return flattened_batch
+    
+    def save_mlp_dataset(self, data, out_file):
+        # Ensure host NumPy array, contiguous float32
+        batch_np = np.asarray(data, dtype=np.float32, order="C")
+
+        # Open or create a Zarr array at the given path and append along axis 0
+        try:
+            arr = zarr.open_array(out_file, mode='r+')
+            # If array exists but feature dim mismatches, raise for clarity
+            if arr.ndim != 2 or arr.shape[1] != batch_np.shape[1]:
+                raise ValueError(
+                    f"Feature dimension mismatch: existing array shape {arr.shape}, incoming {batch_np.shape}"
+                )
+        except:
+            feature_dim = int(batch_np.shape[1])
+            parent = os.path.dirname(out_file)
+            if parent and not os.path.exists(parent):
+                os.makedirs(parent, exist_ok=True)
+            arr = zarr.open_array(
+                out_file,
+                mode='w',
+                shape=(0, feature_dim),
+                chunks=(min(1024, max(1, batch_np.shape[0])), feature_dim),
+                dtype='float32',
+                fill_value=0.0,
+                config={'write_empty_chunks': False},
+            )
+
+        # Append by resizing first axis and writing the new slice
+        old_n = int(arr.shape[0])
+        new_n = old_n + int(batch_np.shape[0])
+        arr.resize((new_n, arr.shape[1]))
+        arr[old_n:new_n, :] = batch_np
 
     def step(self) -> None:
         # Step 1: Batched linearize dynamics for all agents
@@ -241,18 +295,28 @@ class Simulator:
         # Step 4: Update control trajectories (only the valid portion if near the end)
         self.horizon_u_trajs += self.step_size * v_trajs
 
-    def run_test(self) -> None:
+    def run_test(self, gen_data_configs: Dict[str, Any] = None) -> None:
         for iter_timestep in tqdm(range(self.time_steps)):
+            gen_data = gen_data_configs is not None
             x_trajs = self.calculate_x_trajs()
             self.setup_horizon_arrays(x_trajs, iter_timestep)
 
             # calculate mask of other agents to consider for each agent
-            self.run_masking_method(self.masking_method, iter_timestep, x_trajs)
+            past_x_trajs = self.run_masking_method(self.masking_method, iter_timestep, x_trajs)
+
+            # save model input data
+            if gen_data:
+                if gen_data_configs['model_type'] == 'mlp':
+                    past_x_trajs_flattened = self._flatten_x_trajs(past_x_trajs)
+                    self.save_mlp_dataset(past_x_trajs_flattened, gen_data_configs['inputs_file'])
+                elif gen_data_configs['model_type'] == 'gnn':
+                    raise NotImplementedError("GNN data generation not implemented yet")
 
             # run optimization for horizon trajectory
             for _ in range(self.optimization_iters):
                 self.step()
 
+            # print out losses if debug mode or generate data
             if self.debug:
                 # calculate loss vals/min pairwise distances
                 self.player_masks.append(self.other_index)
@@ -287,6 +351,15 @@ class Simulator:
 
             # update u_trajs
             self.u_trajs = self.u_trajs.at[:, iter_timestep, :].set(self.horizon_u_trajs[:, 0, :])
+
+            # write out data if generating data
+            if gen_data:
+                x_trajs, _, _ = self.jit_batched_linearize_dyn(self.x0s, self.u_trajs)
+                x_trajs_t = x_trajs[:, iter_timestep:iter_timestep+1, :].squeeze(axis=1)
+                if gen_data_configs['model_type'] == 'mlp':
+                    self.save_mlp_dataset(x_trajs_t, gen_data_configs['targets_file'])
+                elif gen_data_configs['model_type'] == 'gnn':
+                    raise NotImplementedError("GNN data generation not implemented yet")
         
         # calculate x_traj/u_traj for all agents based off batched values in simulator
         for i, agent in enumerate(self.agents):

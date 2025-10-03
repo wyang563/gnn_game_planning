@@ -5,6 +5,7 @@ import jax.random
 from jax import jit, vmap, grad, value_and_grad
 import optax
 from flax import nnx
+from flax.training.train_state import TrainState
 from utils.utils import load_config, parse_arguments
 from tqdm import tqdm
 from models.policies import *
@@ -30,9 +31,8 @@ class SimulatorTrain:
         )
         
         # Setup optimizer - initialize with model parameters
-        self.rng = jax.random.PRNGKey(kwargs["random_seed"])
-        self.optimizer = optax.adam(self.learning_rate)
-        self.opt_state = self.optimizer.init(nnx.state(self.model, nnx.Param))
+        tx = optax.adam(self.learning_rate)
+        self.optimizer = nnx.Optimizer(self.model, tx, wrt=nnx.Param)
         self.sigma_1 = kwargs["sigma_1"]
         self.sigma_2 = kwargs["sigma_2"]
 
@@ -72,9 +72,42 @@ class SimulatorTrain:
         flattened_batch = result.reshape(n_agents, n_agents * mask_horizon * state_dim)
         return flattened_batch
 
-    def loss(self, predicted_masks, model_x_trajs, target_x_trajs):
-        model_positions = model_x_trajs[:, :, :2]
+    def calc_loss(self, model):
+        # loop we define to create x_trajs
+        x_trajs = self.simulator.calculate_x_trajs()
+        self.simulator.setup_horizon_arrays(x_trajs, self.iter_timestep)
+
+        # run model to get mask
+        past_x_trajs = self.simulator.get_past_x_trajs(x_trajs, self.iter_timestep)
+        flattened_batch = self._flatten_x_trajs(past_x_trajs)
+        predicted_masks = model(flattened_batch)
+        self.simulator.other_index = predicted_masks
+        cached_u_trajs = self.simulator.horizon_u_trajs.copy()
+
+        # calculate trajectory values with model mask applied
+        for _ in range(self.simulator.optimization_iters):
+            self.simulator.step()
+
+        model_x_trajs, _, _ = self.simulator.jit_batched_linearize_dyn(self.simulator.horizon_x0s, self.simulator.horizon_u_trajs)
+        u_traj_update = self.simulator.horizon_u_trajs[:, 0, :]
+
+        # reset simulator horizon_u_trajs
+        self.simulator.horizon_u_trajs = cached_u_trajs
+        mask_diag = ~jnp.eye(self.simulator.n_agents, dtype=bool)
+        self.simulator.other_index = mask_diag.astype(jnp.int32)
+
+        # calculate loss values with all agents
+        for _ in range(self.simulator.optimization_iters):
+            self.simulator.step()
+
+        target_x_trajs, _, _ = self.simulator.jit_batched_linearize_dyn(self.simulator.horizon_x0s, self.simulator.horizon_u_trajs)
+
+        # update u_trajs
+        self.simulator.u_trajs = self.simulator.u_trajs.at[:, self.iter_timestep, :].set(u_traj_update)
+
+        # calculate loss values
         target_positions = target_x_trajs[:, :, :2]
+        model_positions = model_x_trajs[:, :, :2]
 
         binary_loss = jnp.sum(jnp.abs(0.5 - jnp.abs(predicted_masks - 0.5)))
         mask_loss = self.sigma_1 * jnp.sum(jnp.abs(predicted_masks))
@@ -85,13 +118,45 @@ class SimulatorTrain:
 
         total_loss = binary_loss + mask_loss + traj_loss
         return total_loss, {"binary_loss": binary_loss, "mask_loss": mask_loss, "traj_loss": traj_loss}
+    
+    def compute_loss_and_grad(self, model): 
+        """
+        Compute loss and gradients for the model.
+        
+        Args:
+            flattened_batch: Input features for the model
+            model_x_trajs: Trajectories from model predictions
+            target_x_trajs: Target trajectories (ground truth)
+            
+        Returns:
+            total_loss: Scalar loss value
+            loss_dict: Dictionary with individual loss components
+            grads: Gradients with respect to model parameters
+        """
+        def compute_loss(model):
+            total_loss, loss_dict = self.calc_loss(model)
+            return total_loss, loss_dict
+        
+        # Compute loss and gradients using nnx.value_and_grad
+        (total_loss, loss_dict), grads = nnx.value_and_grad(compute_loss, has_aux=True)(model)
+        
+        return total_loss, loss_dict, grads
+    
+    def update_model(self, grads):
+        """
+        Update model parameters using computed gradients.
+        
+        Args:
+            grads: Gradients with respect to model parameters (nnx.State object)
+        """
+        self.optimizer.update(self.model, grads)
 
     def train(self, **kwargs):
         for epoch in range(self.epochs):
             print(f"Training epoch {epoch}")
 
             # initiate new instance of simulator
-            simulator = Simulator(
+            self.simulator = Simulator(
                 n_agents=kwargs["n_agents"],
                 Q=kwargs["Q"],
                 R=kwargs["R"],
@@ -114,40 +179,12 @@ class SimulatorTrain:
             )
 
             # run full loop through simulator
-            for iter_timestep in tqdm(range(simulator.time_steps)):
-                x_trajs = simulator.calculate_x_trajs()
-                simulator.setup_horizon_arrays(x_trajs, iter_timestep)
-                # run model to get mask
-                past_x_trajs = simulator.get_past_x_trajs(x_trajs, iter_timestep)
-                flattened_batch = self._flatten_x_trajs(past_x_trajs)
-                predicted_masks = self.model(flattened_batch)
-                simulator.other_index = predicted_masks
-                cached_u_trajs = simulator.horizon_u_trajs.copy() # use unupdated version of u_trajs for baseline sim later on
-
-                # calculate trajectory values with model mask applied
-                for _ in range(simulator.optimization_iters):
-                    simulator.step()
-                
-                model_x_trajs, _, _ = simulator.jit_batched_linearize_dyn(simulator.horizon_x0s, simulator.horizon_u_trajs)
-                u_traj_update = simulator.horizon_u_trajs[:, 0, :]
-
-                # reset simulator horizon_u_trajs
-                simulator.horizon_u_trajs = cached_u_trajs
-                
-                mask_diag = ~jnp.eye(simulator.n_agents, dtype=bool)
-                simulator.other_index = mask_diag.astype(jnp.int32)
-
-                # calculate loss values with all agents
-                for _ in range(simulator.optimization_iters):
-                    simulator.step()
-
-                target_x_trajs, _, _ = simulator.jit_batched_linearize_dyn(simulator.horizon_x0s, simulator.horizon_u_trajs)
-                
-                # Implement PSN Game loss function from section 3.3
-                # Compute loss and gradients with batched call along axis 0
-
-                # update u_trajs
-                simulator.u_trajs = simulator.u_trajs.at[:, iter_timestep, :].set(u_traj_update)
+            for iter_timestep in tqdm(range(self.simulator.time_steps)):
+                self.iter_timestep = iter_timestep
+                total_loss, loss_dict, grads = self.compute_loss_and_grad(self.model)
+                self.update_model(grads)
+                if iter_timestep % 50 == 0:
+                    print(f"Iteration {iter_timestep}, Total Loss: {total_loss}, Binary Loss: {loss_dict['binary_loss']}, Mask Loss: {loss_dict['mask_loss']}, Traj Loss: {loss_dict['traj_loss']}")
                 
 if __name__ == "__main__":
     DEBUG = True

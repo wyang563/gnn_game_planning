@@ -1,5 +1,7 @@
 # dataset and training logs
 src/data/vci-dataset-citr
+src/data/mlp*
+src/data/gnn*
 logs
 example_files
 *outputs*
