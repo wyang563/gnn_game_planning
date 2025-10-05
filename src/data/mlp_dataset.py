@@ -72,11 +72,11 @@ class MLPDataset:
         self.x0s_dim = self.x0s_array.shape[1]
         self.ref_trajs_shape = self.ref_trajs_array.shape[1:]  # (30, 2) for 2D arrays
         
-        print(f"Dataset loaded: {self.num_samples} samples")
-        print(f"Input shape: {self.inputs_array.shape}")
-        print(f"Target shape: {self.targets_array.shape} -> per sample: {self.target_shape}")
-        print(f"X0s shape: {self.x0s_array.shape}")
-        print(f"Ref trajs shape: {self.ref_trajs_array.shape} -> per sample: {self.ref_trajs_shape}")
+        # print(f"Dataset loaded: {self.num_samples} samples")
+        # print(f"Input shape: {self.inputs_array.shape}")
+        # print(f"Target shape: {self.targets_array.shape} -> per sample: {self.target_shape}")
+        # print(f"X0s shape: {self.x0s_array.shape}")
+        # print(f"Ref trajs shape: {self.ref_trajs_array.shape} -> per sample: {self.ref_trajs_shape}")
     
     def _zarr_generator(self) -> Iterator[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         """
