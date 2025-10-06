@@ -20,7 +20,6 @@ class MLPDataset:
         targets_path: str,
         x0s_path: str,
         ref_trajs_path: str,
-        batch_size: int = 32,
         shuffle_buffer: int = 1000,
         prefetch_size: int = 2
     ):
@@ -32,7 +31,7 @@ class MLPDataset:
             targets_path: Path to Zarr array containing target data
             x0s_path: Path to Zarr array containing initial states
             ref_trajs_path: Path to Zarr array containing reference trajectories
-            batch_size: Number of samples per batch
+            batch_size: Number of samples per batch (will be forced to 1)
             shuffle_buffer: Size of shuffle buffer for randomization
             prefetch_size: Number of batches to prefetch
         """
@@ -40,7 +39,7 @@ class MLPDataset:
         self.targets_path = targets_path
         self.x0s_path = x0s_path
         self.ref_trajs_path = ref_trajs_path
-        self.batch_size = batch_size
+        self.batch_size = 1  # Always use batch size of 1
         self.shuffle_buffer = shuffle_buffer
         self.prefetch_size = prefetch_size
         
@@ -60,58 +59,71 @@ class MLPDataset:
         self.x0s_array = zarr.open_array(x0s_path, mode='r')
         self.ref_trajs_array = zarr.open_array(ref_trajs_path, mode='r')
         
-        # Validate that all arrays have the same number of samples
-        self.num_samples = self.inputs_array.shape[0]
-        if (self.targets_array.shape[0] != self.num_samples or 
-            self.x0s_array.shape[0] != self.num_samples or 
-            self.ref_trajs_array.shape[0] != self.num_samples):
-            raise ValueError("All data arrays must have the same number of samples")
+        # Data is now stored as [num_timesteps, N, ...] where each timestep contains N agents
+        # We need to validate that all arrays have the same structure
+        self.num_timesteps = self.inputs_array.shape[0]
+        if (self.targets_array.shape[0] != self.num_timesteps or 
+            self.x0s_array.shape[0] != self.num_timesteps or 
+            self.ref_trajs_array.shape[0] != self.num_timesteps):
+            raise ValueError("All data arrays must have the same number of timesteps")
         
-        self.input_dim = self.inputs_array.shape[1]
-        self.target_shape = self.targets_array.shape[1:]
-        self.x0s_dim = self.x0s_array.shape[1]
-        self.ref_trajs_shape = self.ref_trajs_array.shape[1:]  # (30, 2) for 2D arrays
+        # The second dimension is the number of agents per timestep
+        self.n_agents = self.inputs_array.shape[1]
+        if (self.targets_array.shape[1] != self.n_agents or 
+            self.x0s_array.shape[1] != self.n_agents or 
+            self.ref_trajs_array.shape[1] != self.n_agents):
+            raise ValueError("All data arrays must have the same number of agents")
         
-        # print(f"Dataset loaded: {self.num_samples} samples")
+        # Number of samples is just the number of timesteps (each timestep contains all N agents)
+        self.num_samples = self.num_timesteps
+        
+        # Shape information (keeping the agent dimension)
+        self.inputs_shape = self.inputs_array.shape[1:]  # (N, feature_dim)
+        self.targets_shape = self.targets_array.shape[1:]  # (N, horizon, state_dim)
+        self.x0s_shape = self.x0s_array.shape[1:]  # (N, state_dim)
+        self.ref_trajs_shape = self.ref_trajs_array.shape[1:]  # (N, horizon, 2)
+        
+        # print(f"Dataset loaded: {self.num_timesteps} timesteps with {self.n_agents} agents each")
         # print(f"Input shape: {self.inputs_array.shape}")
-        # print(f"Target shape: {self.targets_array.shape} -> per sample: {self.target_shape}")
+        # print(f"Target shape: {self.targets_array.shape}")
         # print(f"X0s shape: {self.x0s_array.shape}")
-        # print(f"Ref trajs shape: {self.ref_trajs_array.shape} -> per sample: {self.ref_trajs_shape}")
+        # print(f"Ref trajs shape: {self.ref_trajs_array.shape}")
     
     def _zarr_generator(self) -> Iterator[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         """
         Generator that yields (inputs, x0s, ref_trajs, targets) tuples from Zarr arrays.
-        All data comes from the same index i to ensure consistency.
+        Data is stored as [num_timesteps, N, ...], and we yield all N agents together for each timestep.
         """
-        for i in range(self.num_samples):
-            # Load data as NumPy arrays from the same index
-            input_data = np.asarray(self.inputs_array[i], dtype=np.float32)
-            x0s_data = np.asarray(self.x0s_array[i], dtype=np.float32)
-            ref_trajs_data = np.asarray(self.ref_trajs_array[i], dtype=np.float32)
-            target_data = np.asarray(self.targets_array[i], dtype=np.float32)
-            yield input_data, x0s_data, ref_trajs_data, target_data
+        for timestep_idx in range(self.num_timesteps):
+            # Load the data for this timestep and yield all N agents together (shape: [N, ...])
+            inputs_timestep = np.asarray(self.inputs_array[timestep_idx], dtype=np.float32)
+            x0s_timestep = np.asarray(self.x0s_array[timestep_idx], dtype=np.float32)
+            ref_trajs_timestep = np.asarray(self.ref_trajs_array[timestep_idx], dtype=np.float32)
+            targets_timestep = np.asarray(self.targets_array[timestep_idx], dtype=np.float32)
+            
+            yield inputs_timestep, x0s_timestep, ref_trajs_timestep, targets_timestep
     
     def create_tf_dataset(self) -> tf.data.Dataset:
         """
         Create a TensorFlow dataset from the Zarr data.
         
         Returns:
-            tf.data.Dataset that yields (inputs, x0s, ref_trajs, targets) batches
+            tf.data.Dataset that yields (inputs, x0s, ref_trajs, targets) batches with shape [1, N, ...]
         """
         # Create dataset from generator
         dataset = tf.data.Dataset.from_generator(
             self._zarr_generator,
             output_signature=(
-                tf.TensorSpec(shape=(self.input_dim,), dtype=tf.float32),
-                tf.TensorSpec(shape=(self.x0s_dim,), dtype=tf.float32),
-                tf.TensorSpec(shape=self.ref_trajs_shape, dtype=tf.float32),  # (30, 2)
-                tf.TensorSpec(shape=self.target_shape, dtype=tf.float32)  # (4,)
+                tf.TensorSpec(shape=self.inputs_shape, dtype=tf.float32),  # (N, feature_dim)
+                tf.TensorSpec(shape=self.x0s_shape, dtype=tf.float32),  # (N, state_dim)
+                tf.TensorSpec(shape=self.ref_trajs_shape, dtype=tf.float32),  # (N, horizon, 2)
+                tf.TensorSpec(shape=self.targets_shape, dtype=tf.float32)  # (N, horizon, state_dim)
             )
         )
         
         # Apply transformations
         dataset = dataset.shuffle(self.shuffle_buffer)
-        dataset = dataset.batch(self.batch_size, drop_remainder=True)
+        dataset = dataset.batch(self.batch_size, drop_remainder=False)  # batch_size is always 1
         dataset = dataset.prefetch(self.prefetch_size)
         
         return dataset
@@ -156,7 +168,6 @@ def create_mlp_dataloader(
     targets_path: str,
     x0s_path: str,
     ref_trajs_path: str,
-    batch_size: int = 32,
     shuffle_buffer: int = 1000,
     prefetch_size: int = 2
 ) -> MLPDataset:
@@ -180,7 +191,6 @@ def create_mlp_dataloader(
         targets_path=targets_path,
         x0s_path=x0s_path,
         ref_trajs_path=ref_trajs_path,
-        batch_size=batch_size,
         shuffle_buffer=shuffle_buffer,
         prefetch_size=prefetch_size
     )
@@ -190,11 +200,10 @@ def create_mlp_dataloader(
 if __name__ == "__main__":
     # Create dataset loader
     dataset = create_mlp_dataloader(
-        inputs_path="src/data/mlp_n_agents_10_test/inputs_test.zarr",
-        targets_path="src/data/mlp_n_agents_10_test/targets_test.zarr",
-        x0s_path="src/data/mlp_n_agents_10_test/x0s_test.zarr",
-        ref_trajs_path="src/data/mlp_n_agents_10_test/ref_trajs_test.zarr",
-        batch_size=16,
+        inputs_path="src/data/mlp_n_agents_10_test/inputs.zarr",
+        targets_path="src/data/mlp_n_agents_10_test/targets.zarr",
+        x0s_path="src/data/mlp_n_agents_10_test/x0s.zarr",
+        ref_trajs_path="src/data/mlp_n_agents_10_test/ref_trajs.zarr",
         shuffle_buffer=500
     )
     

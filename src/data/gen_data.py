@@ -53,10 +53,10 @@ if __name__ == "__main__":
     if model_type == "mlp":
         gen_data_configs = {
             "model_type": model_type,
-            "inputs_file": f"src/data/mlp_n_agents_{N}_{mode}/inputs_{mode}.zarr",
-            "x0s_file": f"src/data/mlp_n_agents_{N}_{mode}/x0s_{mode}.zarr",
-            "ref_trajs_file": f"src/data/mlp_n_agents_{N}_{mode}/ref_trajs_{mode}.zarr",
-            "targets_file": f"src/data/mlp_n_agents_{N}_{mode}/targets_{mode}.zarr",
+            "inputs_file": f"src/data/mlp_n_agents_{N}_{mode}/inputs.zarr",
+            "x0s_file": f"src/data/mlp_n_agents_{N}_{mode}/x0s.zarr",
+            "ref_trajs_file": f"src/data/mlp_n_agents_{N}_{mode}/ref_trajs.zarr",
+            "targets_file": f"src/data/mlp_n_agents_{N}_{mode}/targets.zarr",
         }
     elif model_type == "gnn":
         raise NotImplementedError("GNN data generation not implemented yet")

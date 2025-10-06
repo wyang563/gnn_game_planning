@@ -246,6 +246,9 @@ class Simulator:
     def save_mlp_dataset(self, data, out_file):
         # Ensure host NumPy array, contiguous float32
         batch_np = np.asarray(data, dtype=np.float32, order="C")
+        
+        # Add extra dimension at the front: [N, ...] -> [1, N, ...]
+        batch_np = np.expand_dims(batch_np, axis=0)
 
         # Open or create a Zarr array at the given path and append along axis 0
         try:
@@ -262,18 +265,18 @@ class Simulator:
                 )
         except:
             # Create new array with appropriate shape
-            if batch_np.ndim == 2:
-                # 2D case: (batch_size, feature_dim)
-                feature_dims = (int(batch_np.shape[1]),)
-                initial_shape = (0,) + feature_dims
-                chunk_shape = (min(1024, max(1, batch_np.shape[0])),) + feature_dims
-            elif batch_np.ndim == 3:
-                # 3D case: (batch_size, dim1, dim2)
+            if batch_np.ndim == 3:
+                # 3D case: (1, N, feature_dim)
                 feature_dims = (int(batch_np.shape[1]), int(batch_np.shape[2]))
                 initial_shape = (0,) + feature_dims
-                chunk_shape = (min(1024, max(1, batch_np.shape[0])),) + feature_dims
+                chunk_shape = (1,) + feature_dims
+            elif batch_np.ndim == 4:
+                # 4D case: (1, N, dim1, dim2)
+                feature_dims = (int(batch_np.shape[1]), int(batch_np.shape[2]), int(batch_np.shape[3]))
+                initial_shape = (0,) + feature_dims
+                chunk_shape = (1,) + feature_dims
             else:
-                raise ValueError(f"Unsupported data dimensionality: {batch_np.ndim}D. Only 2D and 3D data are supported.")
+                raise ValueError(f"Unsupported data dimensionality: {batch_np.ndim}D. Only 3D and 4D data are supported after expansion.")
             
             parent = os.path.dirname(out_file)
             if parent and not os.path.exists(parent):
@@ -288,9 +291,9 @@ class Simulator:
                 config={'write_empty_chunks': False},
             )
 
-        # Append by resizing first axis and writing the new slice
+        # Append by resizing first axis and writing the new slice (now appending 1 entry instead of N)
         old_n = int(arr.shape[0])
-        new_n = old_n + int(batch_np.shape[0])
+        new_n = old_n + 1  # Only adding 1 entry now
         new_shape = (new_n,) + arr.shape[1:]
         arr.resize(new_shape)
         arr[old_n:new_n] = batch_np
@@ -480,4 +483,5 @@ if __name__ == "__main__":
     # Generate ego agent perspective GIFs
     # print("\nGenerating ego agent perspective GIFs...")
     # plotter.create_ego_agent_gif(simulator, timestep_interval=20, interval=100)
+    
     
