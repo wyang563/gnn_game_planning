@@ -3,8 +3,7 @@ import jax.numpy as jnp
 import jax.random
 from jax import jit, vmap, grad, value_and_grad
 import optax
-from flax import nnx
-from flax.training.train_state import TrainState
+import equinox as eqx
 from utils.utils import load_config, parse_arguments
 from tqdm import tqdm
 from models.policies import *
@@ -26,7 +25,6 @@ class SimulatorTrain:
         self.learning_rate = kwargs.get("learning_rate", 0.001)
         self.n_agents = kwargs["n_agents"]
         self.mask_horizon = kwargs["mask_horizon"]
-        self.state_dim = kwargs["state_dim"]
         self.step_size = kwargs.get("step_size", 0.002)
         self.dt = kwargs.get("dt", 0.1)
         
@@ -35,17 +33,6 @@ class SimulatorTrain:
         self.R = jnp.diag(jnp.array(kwargs.get("R", [0.1, 0.1])))
         self.W = jnp.array(kwargs.get("W", [5.0, 1.0, 0.1, 1.0]))
         
-        self.model = self._setup_model(
-            model_type=kwargs["model_type"], 
-            state_dim=kwargs["state_dim"],
-            n_agents=kwargs["n_agents"],
-            mask_horizon=kwargs["mask_horizon"],
-            random_seed=kwargs["random_seed"]
-        )
-    
-        # Setup optimizer - initialize with model parameters
-        tx = optax.adam(self.learning_rate)
-        self.optimizer = nnx.Optimizer(self.model, tx, wrt=nnx.Param)
         self.sigma_1 = kwargs["sigma_1"]
         self.sigma_2 = kwargs["sigma_2"]
         self.optimization_iters = kwargs["optimization_iters"]
@@ -76,25 +63,6 @@ class SimulatorTrain:
         else:
             raise ValueError(f"Model type {model_type} not supported")
 
-    def _setup_model(
-        self,
-        model_type: str,
-        state_dim: int,
-        n_agents: int,
-        mask_horizon: int,
-        random_seed: int = 42,
-    ):
-        if model_type == "mlp":
-            return MLP(
-                n_agents=n_agents,
-                mask_horizon=mask_horizon,
-                state_dim=state_dim,
-                hidden_sizes=(256, 64, 16),  # Default architecture from paper
-                random_seed=random_seed
-            )
-        # TODO: add GNN model later
-        else:
-            raise ValueError(f"Model type {model_type} not supported")
     
     def _setup_batched_agent_functions(self):
         """Setup batched agent functions for optimization (similar to Simulator)."""
@@ -143,52 +111,49 @@ class SimulatorTrain:
         self.jit_batched_linearize_loss = jit(batched_linearize_loss)
         self.jit_batched_solve = jit(batched_solve)
     
-    def step(self, x0s, ref_trajs, horizon_size, player_masks):
-        x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(x0s, self.u_trajs)
+    def step(self, x0s, ref_trajs, u_trajs, horizon_size, player_masks):
+        x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(x0s, u_trajs)
 
         all_x_pos = jnp.broadcast_to(x_trajs[:, :, :2], (self.n_agents, self.n_agents, horizon_size, 2))
         other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
         
         mask_for_step = jnp.tile(player_masks[:, None, :], (1, horizon_size, 1))
-        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.u_trajs, ref_trajs, other_x_trajs, mask_for_step)
+        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, u_trajs, ref_trajs, other_x_trajs, mask_for_step)
         v_trajs, _ = self.jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
 
-        self.u_trajs += self.step_size * v_trajs
+        u_trajs = u_trajs + self.step_size * v_trajs
+        return u_trajs
     
-    def loss_fn(self, player_masks, x_trajs, targets):
-        """Compute the loss given player masks, trajectories, and targets."""
+    def compute_loss(self, model, inputs, x0s, ref_trajs, targets):
+        """Forward pass through model and compute loss."""
+        # Get player masks from model
+        player_masks = model(inputs)
+        
+        # Calculate optimal trajectory with current masks
+        horizon_size = ref_trajs.shape[1]
+        u_trajs = jnp.zeros((self.n_agents, horizon_size, 2))
+        
+        for _ in range(self.optimization_iters):
+            u_trajs = self.step(x0s, ref_trajs, u_trajs, horizon_size, player_masks)
+        
+        # Compute final trajectories
+        x_trajs, _, _ = self.jit_batched_linearize_dyn(x0s, u_trajs)
+        
+        # Compute loss
         binary_loss = jnp.sum(jnp.abs(0.5 - jnp.abs(0.5 - player_masks)), axis=-1)
-        mask_loss = jnp.sum(jnp.abs(player_masks), axis=-1) / player_masks.shape[0]
+        mask_loss = self.sigma_1 * jnp.sum(jnp.abs(player_masks), axis=-1) / player_masks.shape[0]
         x_pos = x_trajs[:, :, :2]
         target_pos = targets[:, :, :2]
 
         # sim loss
         d2 = jnp.square(x_pos - target_pos).sum(axis=-1)
-        sim_loss = jnp.sqrt(d2).sum(axis=-1)
+        sim_loss = self.sigma_2 * jnp.sqrt(d2).sum(axis=-1)
         
         # Sum all losses and compute mean
         total_loss = binary_loss + mask_loss + sim_loss
-        return jnp.mean(total_loss)
-    
-    def compute_loss(self, inputs, x0s, ref_trajs, targets):
-        """Forward pass through model and compute loss."""
-        # Get player masks from model
-        player_masks = self.model(inputs)
-        
-        # Calculate optimal trajectory with current masks
-        horizon_size = ref_trajs.shape[1]
-        self.u_trajs = jnp.zeros((self.n_agents, horizon_size, 2))
-        
-        for _ in range(self.optimization_iters):
-            self.step(x0s, ref_trajs, horizon_size, player_masks)
-        
-        # Compute final trajectories
-        x_trajs, _, _ = self.jit_batched_linearize_dyn(x0s, self.u_trajs)
-        
-        # Compute loss
-        return self.loss_fn(player_masks, x_trajs, targets)
+        return total_loss
 
-    def train(self):
+    def train(self, model, optimizer, opt_state):
         for epoch in range(self.epochs):
             print(f"Epoch {epoch + 1}/{self.epochs}")
             epoch_loss = 0.0
@@ -201,12 +166,13 @@ class SimulatorTrain:
                 ref_trajs = ref_trajs.squeeze(0)
                 targets = targets.squeeze(0)
 
-                # Compute loss and gradients
-                loss, grads = nnx.value_and_grad(self.compute_loss)(inputs, x0s, ref_trajs, targets)
-                
-                # Update model parameters
-                self.optimizer.update(grads)
-                
+                # Compute loss and gradients using Equinox
+                loss, grads = eqx.filter_value_and_grad(self.compute_loss)(model, inputs, x0s, ref_trajs, targets)
+
+                # Update parameters
+                updates, opt_state = optimizer.update(grads, opt_state, model)
+                model = eqx.apply_updates(model, updates)
+
                 # Accumulate loss for logging
                 epoch_loss += float(loss)
                 num_batches += 1
@@ -214,6 +180,29 @@ class SimulatorTrain:
             # Print epoch statistics
             avg_loss = epoch_loss / num_batches
             print(f"Epoch {epoch + 1}/{self.epochs} - Average Loss: {avg_loss:.6f}")
+        
+        return model
+
+
+def setup_model(
+    model_type: str,
+    state_dim: int,
+    n_agents: int,
+    mask_horizon: int,
+    random_seed: int = 42,
+):
+    if model_type == "mlp":
+        key = jax.random.PRNGKey(random_seed)
+        return MLP(
+            n_agents=n_agents,
+            mask_horizon=mask_horizon,
+            state_dim=state_dim,
+            hidden_sizes=(256, 64, 16),  # Default architecture from paper
+            key=key
+        )
+    # TODO: add GNN model later
+    else:
+        raise ValueError(f"Model type {model_type} not supported")
 
 if __name__ == "__main__":
     DEBUG = False
@@ -229,14 +218,23 @@ if __name__ == "__main__":
         print(f"Error: {e}")
         exit(1)
     
-    trainer = SimulatorTrain(
+    model = setup_model(
         model_type=config["model_type"],
         state_dim=config["state_dim"],
         n_agents=config["n_agents"],
         mask_horizon=config["mask_horizon"],
         random_seed=config["random_seed"],
+    )
+
+    optimizer = optax.adam(learning_rate=config["learning_rate"])
+    opt_state = optimizer.init(eqx.filter(model, eqx.is_array))
+
+    trainer = SimulatorTrain(
+        model_type=config["model_type"],
+        n_agents=config["n_agents"],
+        mask_horizon=config["mask_horizon"],
+        random_seed=config["random_seed"],
         epochs=config["epochs"],
-        learning_rate=config["learning_rate"],
         dataset_dir=config["dataset_dir"],
         sigma_1=config["sigma_1"],
         sigma_2=config["sigma_2"],
@@ -248,5 +246,5 @@ if __name__ == "__main__":
         W=config["W"],
     )
 
-    trainer.train()
+    final_model = trainer.train(model=model, optimizer=optimizer, opt_state=opt_state)
     
