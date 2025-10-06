@@ -1,7 +1,6 @@
 model_type: "mlp"
 epochs: 10
 learning_rate: 0.001
-batch_size: 16
 n_agents: 10
 mask_horizon: 10
 optimization_iters: 100

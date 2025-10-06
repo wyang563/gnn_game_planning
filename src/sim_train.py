@@ -54,7 +54,6 @@ class SimulatorTrain:
         self.dataloader = self._setup_dataloader(
             model_type=kwargs["model_type"],
             dataset_path=kwargs["dataset_dir"],
-            batch_size=kwargs["batch_size"]
         )
         
         # Setup batched agent functions for optimization
@@ -64,7 +63,6 @@ class SimulatorTrain:
         self,
         model_type: str,
         dataset_path: str,
-        batch_size: int,
     ):
         if model_type == "mlp":
             dataset = create_mlp_dataloader(
@@ -72,7 +70,6 @@ class SimulatorTrain:
                 targets_path=os.path.join(dataset_path, "targets.zarr"),
                 x0s_path=os.path.join(dataset_path, "x0s.zarr"),
                 ref_trajs_path=os.path.join(dataset_path, "ref_trajs.zarr"),
-                batch_size=batch_size,
                 shuffle_buffer=500,
             )
             return dataset.create_jax_iterator()
@@ -146,14 +143,77 @@ class SimulatorTrain:
         self.jit_batched_linearize_loss = jit(batched_linearize_loss)
         self.jit_batched_solve = jit(batched_solve)
     
-    def step(self, x0, u_traj, ref_traj, other_ref_trajs, player_mask):
-        pass
+    def step(self, x0s, ref_trajs, horizon_size, player_masks):
+        x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(x0s, self.u_trajs)
+
+        all_x_pos = jnp.broadcast_to(x_trajs[:, :, :2], (self.n_agents, self.n_agents, horizon_size, 2))
+        other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
+        
+        mask_for_step = jnp.tile(player_masks[:, None, :], (1, horizon_size, 1))
+        a_trajs, b_trajs = self.jit_batched_linearize_loss(x_trajs, self.u_trajs, ref_trajs, other_x_trajs, mask_for_step)
+        v_trajs, _ = self.jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
+
+        self.u_trajs += self.step_size * v_trajs
     
+    def loss_fn(self, player_masks, x_trajs, targets):
+        """Compute the loss given player masks, trajectories, and targets."""
+        binary_loss = jnp.sum(jnp.abs(0.5 - jnp.abs(0.5 - player_masks)), axis=-1)
+        mask_loss = jnp.sum(jnp.abs(player_masks), axis=-1) / player_masks.shape[0]
+        x_pos = x_trajs[:, :, :2]
+        target_pos = targets[:, :, :2]
+
+        # sim loss
+        d2 = jnp.square(x_pos - target_pos).sum(axis=-1)
+        sim_loss = jnp.sqrt(d2).sum(axis=-1)
+        
+        # Sum all losses and compute mean
+        total_loss = binary_loss + mask_loss + sim_loss
+        return jnp.mean(total_loss)
+    
+    def compute_loss(self, inputs, x0s, ref_trajs, targets):
+        """Forward pass through model and compute loss."""
+        # Get player masks from model
+        player_masks = self.model(inputs)
+        
+        # Calculate optimal trajectory with current masks
+        horizon_size = ref_trajs.shape[1]
+        self.u_trajs = jnp.zeros((self.n_agents, horizon_size, 2))
+        
+        for _ in range(self.optimization_iters):
+            self.step(x0s, ref_trajs, horizon_size, player_masks)
+        
+        # Compute final trajectories
+        x_trajs, _, _ = self.jit_batched_linearize_dyn(x0s, self.u_trajs)
+        
+        # Compute loss
+        return self.loss_fn(player_masks, x_trajs, targets)
+
     def train(self):
         for epoch in range(self.epochs):
             print(f"Epoch {epoch + 1}/{self.epochs}")
+            epoch_loss = 0.0
+            num_batches = 0
+            
             for inputs, x0s, ref_trajs, targets in tqdm(self.dataloader, desc="Training"):
-                pass
+                # Squeeze batch dimension
+                inputs = inputs.squeeze(0)
+                x0s = x0s.squeeze(0)
+                ref_trajs = ref_trajs.squeeze(0)
+                targets = targets.squeeze(0)
+
+                # Compute loss and gradients
+                loss, grads = nnx.value_and_grad(self.compute_loss)(inputs, x0s, ref_trajs, targets)
+                
+                # Update model parameters
+                self.optimizer.update(grads)
+                
+                # Accumulate loss for logging
+                epoch_loss += float(loss)
+                num_batches += 1
+            
+            # Print epoch statistics
+            avg_loss = epoch_loss / num_batches
+            print(f"Epoch {epoch + 1}/{self.epochs} - Average Loss: {avg_loss:.6f}")
 
 if __name__ == "__main__":
     DEBUG = False
@@ -177,7 +237,6 @@ if __name__ == "__main__":
         random_seed=config["random_seed"],
         epochs=config["epochs"],
         learning_rate=config["learning_rate"],
-        batch_size=config["batch_size"],
         dataset_dir=config["dataset_dir"],
         sigma_1=config["sigma_1"],
         sigma_2=config["sigma_2"],
