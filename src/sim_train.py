@@ -1,18 +1,19 @@
 import jax
 import jax.numpy as jnp
 import jax.random
-from jax import jit, vmap, grad, value_and_grad
+from jax import jit, vmap
 from jax import debug
 import optax
 import equinox as eqx
 from utils.utils import load_config, parse_arguments
 from tqdm import tqdm
 from models.policies import *
-from sim_solver import Simulator
 from models.mlp import MLP
-from data.mlp_dataset import MLPDataset, create_mlp_dataloader
+from data.mlp_dataset import create_mlp_dataloader
 import os
 from agent import Agent
+from datetime import datetime
+from utils.model_save_load import save_model_npz, load_model_npz
 
 # Configure JAX to use CPU if CUDA has issues
 try:
@@ -24,6 +25,7 @@ class SimulatorTrain:
     def __init__(self, **kwargs):
         self.epochs = kwargs["epochs"]
         self.learning_rate = kwargs.get("learning_rate", 0.001)
+        self.model_type = kwargs["model_type"]
         self.n_agents = kwargs["n_agents"]
         self.mask_horizon = kwargs["mask_horizon"]
         self.step_size = kwargs.get("step_size", 0.002)
@@ -54,14 +56,13 @@ class SimulatorTrain:
         dataset_path: str,
     ):
         if model_type == "mlp":
-            dataset = create_mlp_dataloader(
+            return create_mlp_dataloader(
                 inputs_path=os.path.join(dataset_path, "inputs.zarr"),
                 targets_path=os.path.join(dataset_path, "targets.zarr"),
                 x0s_path=os.path.join(dataset_path, "x0s.zarr"),
                 ref_trajs_path=os.path.join(dataset_path, "ref_trajs.zarr"),
                 shuffle_buffer=500,
             )
-            return dataset.create_jax_iterator()
         else:
             raise ValueError(f"Model type {model_type} not supported")
     
@@ -127,47 +128,43 @@ class SimulatorTrain:
     
     def compute_loss(self, model, inputs, x0s, ref_trajs, targets):
         """Forward pass through model and compute loss."""
-        # Get player masks from model
+        # Get player masks from model and add in ~0 entries for ego-agent
         player_masks = model(inputs)
+        final_player_masks = jnp.full((self.n_agents, self.n_agents), 1e-5, dtype=jnp.float32)
+        rows = jnp.arange(self.n_agents)[:, None]
+        cols = jnp.arange(self.n_agents - 1)[None, :]
+        j_full = jnp.where(cols < rows, cols, cols + 1)
+        idx_map = jnp.stack([jnp.broadcast_to(rows, (self.n_agents, self.n_agents - 1)), j_full], axis=-1)
+
+        final_player_masks = final_player_masks.at[idx_map[..., 0], idx_map[..., 1]].set(player_masks)
+
         if self.debug:
-            jax.debug.print("player_masks: {player_masks}", player_masks=player_masks)
+            jax.debug.print("player_masks: {player_masks}", player_masks=final_player_masks)
         
         # Calculate optimal trajectory with current masks
         horizon_size = ref_trajs.shape[1]
         u_trajs = jnp.zeros((self.n_agents, horizon_size, 2))
         
         for _ in range(self.optimization_iters):
-            u_trajs = self.step(x0s, ref_trajs, u_trajs, horizon_size, player_masks)
+            u_trajs = self.step(x0s, ref_trajs, u_trajs, horizon_size, final_player_masks)
         
         # Compute final trajectories
         x_trajs, _, _ = self.jit_batched_linearize_dyn(x0s, u_trajs)
         
         # Compute loss
-        binary_loss = jnp.sum(jnp.abs(0.5 - jnp.abs(0.5 - player_masks)), axis=-1)
-        mask_loss = self.sigma_1 * jnp.sum(jnp.abs(player_masks), axis=-1) / player_masks.shape[0]
+        binary_loss = jnp.sum(jnp.abs(0.5 - jnp.abs(0.5 - final_player_masks)), axis=-1)
+        mask_loss = self.sigma_1 * jnp.sum(jnp.abs(final_player_masks), axis=-1) / final_player_masks.shape[0]
         x_pos = x_trajs[:, :, :2]
         target_pos = targets[:, :, :2]
 
         # sim loss
         d2 = jnp.square(x_pos - target_pos).sum(axis=-1)
-        
-        
-        # Use L2 loss directly instead of sqrt to avoid gradient explosion at zero
-        # This is equivalent to sqrt(d2) but with stable gradients
         sim_loss = self.sigma_2 * jnp.sqrt(d2 + 1e-8).sum(axis=-1)
         
-        # Sum all losses and compute mean
         total_loss = binary_loss + mask_loss + sim_loss
 
-        if self.debug:
-            jax.debug.print("binary_loss: {binary_loss}, mask_loss: {mask_loss}, sim_loss: {sim_loss}", binary_loss=binary_loss, mask_loss=mask_loss, sim_loss=sim_loss)
-            jax.debug.print(
-                "finite checks | masks allfinite={m_ok} u_trajs={u_ok} x_trajs={x_ok} total_loss={total_loss_ok}", 
-                m_ok=jnp.all(jnp.isfinite(player_masks)),
-                u_ok=jnp.all(jnp.isfinite(u_trajs)),
-                x_ok=jnp.all(jnp.isfinite(x_trajs)),
-                total_loss_ok=jnp.all(jnp.isfinite(total_loss)),
-            )
+        # if self.debug:
+        #     jax.debug.print("binary_loss: {binary_loss}, mask_loss: {mask_loss}, sim_loss: {sim_loss}", binary_loss=binary_loss, mask_loss=mask_loss, sim_loss=sim_loss)
         return jnp.sum(total_loss)
 
     def train(
@@ -176,12 +173,18 @@ class SimulatorTrain:
             optimizer: optax.GradientTransformationExtraArgs, 
             opt_state: optax.OptState
         ): 
+        
+        output_train_dir = f"logs/train_{self.model_type}_{self.n_agents}_agents/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        os.makedirs(output_train_dir, exist_ok=True)
+
         for epoch in range(self.epochs):
             print(f"Epoch {epoch + 1}/{self.epochs}")
+            dataloader = self.dataloader.create_jax_iterator()
             epoch_loss = 0.0
             num_batches = 0
+            batch_loss = 0.0
             
-            for inputs, x0s, ref_trajs, targets in tqdm(self.dataloader, desc="Training"):
+            for inputs, x0s, ref_trajs, targets in tqdm(dataloader, desc="Training"):
                 # Squeeze batch dimension
                 inputs = inputs.squeeze(0)
                 x0s = x0s.squeeze(0)
@@ -197,12 +200,16 @@ class SimulatorTrain:
 
                 # Accumulate loss for logging
                 epoch_loss += float(loss)
+                batch_loss += float(loss)
                 num_batches += 1
 
                 if num_batches % 50 == 0:
-                    print(f"Batch {num_batches} - Loss: {loss:.6f}")
+                    print(f"Running Avg Loss Batch {num_batches} - Loss: {batch_loss/50:.6f}")
+                    batch_loss = 0.0
             
             # Print epoch statistics
+            save_model_npz(os.path.join(output_train_dir, f"model_{epoch}.npz"), model)
+
             avg_loss = epoch_loss / num_batches
             print(f"Epoch {epoch + 1}/{self.epochs} - Average Loss: {avg_loss:.6f}")
         
@@ -229,7 +236,7 @@ def setup_model(
         raise ValueError(f"Model type {model_type} not supported")
 
 if __name__ == "__main__":
-    DEBUG = False  
+    DEBUG = False
 
     args = parse_arguments()
     

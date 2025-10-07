@@ -1,0 +1,2 @@
+#!/bin/bash
+# nohup bash -lc 'cd /home/alex/gnn_game_planning && python src/sim_train.py --config configs/train_large.yaml' > /home/alex/gnn_game_planning/logs/train_$(date +%F_%H-%M-%S).log 2>&1 < /dev/null & disown

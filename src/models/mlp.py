@@ -24,7 +24,7 @@ class MLP(eqx.Module):
     
     def __init__(self, n_agents: int, mask_horizon: int, state_dim: int, hidden_sizes: Tuple[int, ...], key: PRNGKeyArray):
         input_dim = n_agents * mask_horizon * state_dim
-        output_dim = n_agents
+        output_dim = n_agents - 1
         
         # Split the key for each layer initialization
         keys = jax.random.split(key, 4)

@@ -220,6 +220,8 @@ class Simulator:
             self.other_index = jacobian_top_k(past_x_trajs, top_k=self.top_k, dt=self.dt, w1=self.W[0], w2=self.W[1])
         elif masking_method == "nearest_neighbors_radius":
             self.other_index = nearest_neighbors_radius(past_x_trajs, critical_radius=self.critical_radius)
+        elif masking_method == "MLP":
+            pass
         elif masking_method == "None":
             pass
         else:
