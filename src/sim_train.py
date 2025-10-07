@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import jax.random
 from jax import jit, vmap, grad, value_and_grad
+from jax import debug
 import optax
 import equinox as eqx
 from utils.utils import load_config, parse_arguments
@@ -45,6 +46,7 @@ class SimulatorTrain:
         
         # Setup batched agent functions for optimization
         self._setup_batched_agent_functions()
+        self.debug = kwargs["debug"]
 
     def _setup_dataloader(
         self,
@@ -62,7 +64,6 @@ class SimulatorTrain:
             return dataset.create_jax_iterator()
         else:
             raise ValueError(f"Model type {model_type} not supported")
-
     
     def _setup_batched_agent_functions(self):
         """Setup batched agent functions for optimization (similar to Simulator)."""
@@ -114,7 +115,7 @@ class SimulatorTrain:
     def step(self, x0s, ref_trajs, u_trajs, horizon_size, player_masks):
         x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(x0s, u_trajs)
 
-        all_x_pos = jnp.broadcast_to(x_trajs[:, :, :2], (self.n_agents, self.n_agents, horizon_size, 2))
+        all_x_pos = jnp.broadcast_to(x_trajs[None, :, :, :2], (self.n_agents, self.n_agents, horizon_size, 2))
         other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
         
         mask_for_step = jnp.tile(player_masks[:, None, :], (1, horizon_size, 1))
@@ -128,6 +129,8 @@ class SimulatorTrain:
         """Forward pass through model and compute loss."""
         # Get player masks from model
         player_masks = model(inputs)
+        if self.debug:
+            jax.debug.print("player_masks: {player_masks}", player_masks=player_masks)
         
         # Calculate optimal trajectory with current masks
         horizon_size = ref_trajs.shape[1]
@@ -147,13 +150,32 @@ class SimulatorTrain:
 
         # sim loss
         d2 = jnp.square(x_pos - target_pos).sum(axis=-1)
-        sim_loss = self.sigma_2 * jnp.sqrt(d2).sum(axis=-1)
+        
+        
+        # Use L2 loss directly instead of sqrt to avoid gradient explosion at zero
+        # This is equivalent to sqrt(d2) but with stable gradients
+        sim_loss = self.sigma_2 * jnp.sqrt(d2 + 1e-8).sum(axis=-1)
         
         # Sum all losses and compute mean
         total_loss = binary_loss + mask_loss + sim_loss
-        return total_loss
 
-    def train(self, model, optimizer, opt_state):
+        if self.debug:
+            jax.debug.print("binary_loss: {binary_loss}, mask_loss: {mask_loss}, sim_loss: {sim_loss}", binary_loss=binary_loss, mask_loss=mask_loss, sim_loss=sim_loss)
+            jax.debug.print(
+                "finite checks | masks allfinite={m_ok} u_trajs={u_ok} x_trajs={x_ok} total_loss={total_loss_ok}", 
+                m_ok=jnp.all(jnp.isfinite(player_masks)),
+                u_ok=jnp.all(jnp.isfinite(u_trajs)),
+                x_ok=jnp.all(jnp.isfinite(x_trajs)),
+                total_loss_ok=jnp.all(jnp.isfinite(total_loss)),
+            )
+        return jnp.sum(total_loss)
+
+    def train(
+            self, 
+            model: MLP, 
+            optimizer: optax.GradientTransformationExtraArgs, 
+            opt_state: optax.OptState
+        ): 
         for epoch in range(self.epochs):
             print(f"Epoch {epoch + 1}/{self.epochs}")
             epoch_loss = 0.0
@@ -176,13 +198,15 @@ class SimulatorTrain:
                 # Accumulate loss for logging
                 epoch_loss += float(loss)
                 num_batches += 1
+
+                if num_batches % 50 == 0:
+                    print(f"Batch {num_batches} - Loss: {loss:.6f}")
             
             # Print epoch statistics
             avg_loss = epoch_loss / num_batches
             print(f"Epoch {epoch + 1}/{self.epochs} - Average Loss: {avg_loss:.6f}")
         
         return model
-
 
 def setup_model(
     model_type: str,
@@ -205,7 +229,7 @@ def setup_model(
         raise ValueError(f"Model type {model_type} not supported")
 
 if __name__ == "__main__":
-    DEBUG = False
+    DEBUG = False  
 
     args = parse_arguments()
     
@@ -244,7 +268,8 @@ if __name__ == "__main__":
         Q=config["Q"],
         R=config["R"],
         W=config["W"],
+        debug=DEBUG,
     )
 
-    final_model = trainer.train(model=model, optimizer=optimizer, opt_state=opt_state)
+    final_model = trainer.train(model=model, optimizer=optimizer, opt_state=opt_state) 
     

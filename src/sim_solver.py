@@ -305,7 +305,7 @@ class Simulator:
         # Step 2: Prepare other player trajectories for each agent
         # Create a 3D array where other_trajs[i] contains trajectories of all other agents for agent i
         # Always use self.horizon for shape consistency (avoid JIT recompilation)
-        all_x_pos = jnp.broadcast_to(x_trajs[:, :, :2], (self.n_agents, self.n_agents, self.horizon, 2))
+        all_x_pos = jnp.broadcast_to(x_trajs[None, :, :, :2], (self.n_agents, self.n_agents, self.horizon, 2))
         other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
 
         # Step 3: solve for all agents
