@@ -445,8 +445,8 @@ class LQRPlotter:
                         # player_mask_np is now an n_agent x n_agent array where [i][j] = 1 if agent i includes agent j
                         agent_mask = player_mask_np[agent.id]  # Get the mask for this agent
                         # Convert binary mask to list of visible agent indices
-                        visible_agents = [j for j in range(len(agent_mask)) if agent_mask[j] == 1 and j != agent.id]
-                        masked_other_agents = [j for j in range(len(agent_mask)) if agent_mask[j] == 0 and j != agent.id]
+                        visible_agents = [j for j in range(len(agent_mask)) if agent_mask[j] > 0.8 and j != agent.id]
+                        masked_other_agents = [j for j in range(len(agent_mask)) if agent_mask[j] <= 0.8 and j != agent.id]
                         timestep_entry["player_mask"] = {
                             "visible_other_agents": visible_agents,
                             "masked_other_agents": masked_other_agents
@@ -548,10 +548,8 @@ class LQRPlotter:
                 
                 # Get the player mask for this simulation timestep (if available)
                 if sim_timestep < len(simulator.player_masks):
-                    # player_masks[t] is now an n_agent x n_agent array where [i][j] = 1 if agent i includes agent j
                     ego_mask = simulator.player_masks[sim_timestep][ego_agent_id]
-                    # Masked agents are those NOT visible (mask value = 0, excluding self)
-                    masked_agents = set([j for j in range(len(ego_mask)) if ego_mask[j] == 1 and j != ego_agent_id])
+                    masked_agents = set([j for j in range(len(ego_mask)) if ego_mask[j] > 0.8 and j != ego_agent_id])
                 else:
                     # Fallback: all other agents are masked
                     masked_agents = set(range(self.n_agents)) - {ego_agent_id}

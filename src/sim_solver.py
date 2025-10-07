@@ -11,58 +11,51 @@ from agent import Agent
 import zarr
 import numpy as np
 import os
+from models.mlp import MLP
+import equinox as eqx
 
 # Configure JAX to use float32 by default for better performance
 jax.config.update("jax_default_dtype_bits", "32")
 
 class Simulator:
-    def __init__(
-        self, 
-        n_agents: int,
-        Q: jnp.ndarray,
-        R: jnp.ndarray, 
-        W: jnp.ndarray,
-        time_steps: int, # number of horizons calculated per iteration
-        horizon: int, 
-        mask_horizon: int,
-        dt: float, 
-        init_arena_range: Tuple[float, float], 
-        device: str = "cpu",
-        goal_threshold: float = 0.1,
-        optimization_iters: int = 1000,
-        step_size: float = 0.002,
-        init_ps: List[jnp.ndarray] = None,
-        goals: List[jnp.ndarray] = None,
-        init_type: str = "random",
-        limit_past_horizon: bool = False,
-        masking_method: str = None,
-        top_k: int = 3,
-        critical_radius: float = 1.0,
-        debug: bool = False,
-    ) -> None: 
+    def __init__(self, **kwargs) -> None:
+        # Required parameters
+        self.n_agents = kwargs["n_agents"]
+        self.Q = kwargs["Q"]
+        self.R = kwargs["R"]
+        self.W = kwargs["W"]
+        self.time_steps = kwargs["time_steps"]  # number of horizons calculated per iteration
+        self.horizon = kwargs["horizon"]
+        self.mask_horizon = kwargs["mask_horizon"]
+        self.dt = kwargs["dt"]
+        self.init_arena_range = kwargs["init_arena_range"]
 
-        self.n_agents = n_agents
-        self.Q = Q
-        self.R = R
-        self.W = W
-        self.horizon = horizon
-        self.mask_horizon = mask_horizon
-        self.time_steps = time_steps
-        self.dt = dt
-        self.init_arena_range = init_arena_range
-        self.device = jax.devices(device)[0]
-        self.goal_threshold = goal_threshold
+        # Optional parameters with defaults
+        device_str = kwargs.get("device", "cpu")
+        self.device = jax.devices(device_str)[0]
+        self.goal_threshold = kwargs.get("goal_threshold", 0.1)
+        self.optimization_iters = kwargs.get("optimization_iters", 1000)
+        self.step_size = kwargs.get("step_size", 0.002)
+        self.init_ps = kwargs.get("init_ps", None)
+        self.goals = kwargs.get("goals", None)
+        self.init_type = kwargs.get("init_type", "random")
+        self.limit_past_horizon = kwargs.get("limit_past_horizon", True)
+        self.masking_method = kwargs.get("masking_method", None)
+        self.top_k = kwargs.get("top_k", 3)
+        self.critical_radius = kwargs.get("critical_radius", 1.0)
+        self.debug = kwargs.get("debug", False)
+        self.masking_model_path = kwargs.get("masking_model_path", None)
+        
+        # setup MLP model
+        if self.masking_model_path is not None:
+            if self.masking_method == "MLP":
+                self.model = eqx.tree_deserialise_leaves(self.masking_model_path, MLP(self.n_agents, self.mask_horizon, 4, (256, 64, 16), key=jax.random.PRNGKey(42)))
+
+        # Other initial state
         self.agent_trajectories = None
-        self.optimization_iters = optimization_iters 
-        self.step_size = step_size
-        self.debug = debug
-        self.limit_past_horizon = limit_past_horizon
-        self.top_k = top_k
-        self.critical_radius = critical_radius
-        self.masking_method = masking_method
 
         self.agents: List[Agent] = []
-        self.setup_sim(init_ps, goals, init_type)
+        self.setup_sim(self.init_ps, self.goals, self.init_type)
         
         # Create batched jitted functions for better GPU utilization
         self._setup_batched_functions()
@@ -221,7 +214,7 @@ class Simulator:
         elif masking_method == "nearest_neighbors_radius":
             self.other_index = nearest_neighbors_radius(past_x_trajs, critical_radius=self.critical_radius)
         elif masking_method == "MLP":
-            pass
+            self.other_index = run_MLP(self._flatten_x_trajs(past_x_trajs), self.model, self.n_agents)
         elif masking_method == "None":
             pass
         else:
@@ -430,6 +423,7 @@ if __name__ == "__main__":
     top_k = masking_config['top_k']
     critical_radius = masking_config['critical_radius']
     mask_horizon = masking_config['mask_horizon']
+    masking_model_path = masking_config.get('masking_model_path', None)
 
     # Cost weights (position, velocity, control)
     Q = jnp.diag(jnp.array(simulator_config['Q']))  # Higher position weights
@@ -457,6 +451,7 @@ if __name__ == "__main__":
         masking_method=masking_method,
         top_k=top_k,
         critical_radius=critical_radius,
+        masking_model_path=masking_model_path,
         debug=DEBUG,
     )
 
@@ -483,7 +478,7 @@ if __name__ == "__main__":
     plotter.plot_all(create_gif=False, gif_interval=50, dump_data=True, simulator=simulator)
     
     # Generate ego agent perspective GIFs
-    # print("\nGenerating ego agent perspective GIFs...")
-    # plotter.create_ego_agent_gif(simulator, timestep_interval=20, interval=100)
+    print("\nGenerating ego agent perspective GIFs...")
+    plotter.create_ego_agent_gif(simulator, timestep_interval=20, interval=100)
     
     

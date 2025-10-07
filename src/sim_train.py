@@ -13,7 +13,6 @@ from data.mlp_dataset import create_mlp_dataloader
 import os
 from agent import Agent
 from datetime import datetime
-from utils.model_save_load import save_model_npz, load_model_npz
 
 # Configure JAX to use CPU if CUDA has issues
 try:
@@ -208,7 +207,7 @@ class SimulatorTrain:
                     batch_loss = 0.0
             
             # Print epoch statistics
-            save_model_npz(os.path.join(output_train_dir, f"model_{epoch}.npz"), model)
+            eqx.tree_serialise_leaves(os.path.join(output_train_dir, f"model_{epoch}.eqx"), model)
 
             avg_loss = epoch_loss / num_batches
             print(f"Epoch {epoch + 1}/{self.epochs} - Average Loss: {avg_loss:.6f}")

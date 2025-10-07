@@ -4,7 +4,7 @@ simulator:
   time_steps: 100
   dt: 0.05
   init_arena_range: [-3.0, 3.0]
-  init_type: "origin"
+  init_type: "random"
   goal_threshold: 0.2
   device: "cuda"
   optimization_iters: 100
@@ -16,7 +16,6 @@ simulator:
 masking:
   limit_past_horizon: True
   mask_horizon: 10
-  masking_method: "MLP"
-  masking_model_path: "logs/train_mlp_10_agents/20251007_132112/model_0.eqx"
+  masking_method: "None"
   top_k: 5
   critical_radius: 2.0
