@@ -214,7 +214,7 @@ class Simulator:
         elif masking_method == "nearest_neighbors_radius":
             self.other_index = nearest_neighbors_radius(past_x_trajs, critical_radius=self.critical_radius)
         elif masking_method == "MLP":
-            self.other_index = run_MLP(self._flatten_x_trajs(past_x_trajs), self.model, self.n_agents)
+            self.other_index = run_MLP(self._batch_x_trajs(past_x_trajs), self.model, self.n_agents)
         elif masking_method == "None":
             pass
         else:

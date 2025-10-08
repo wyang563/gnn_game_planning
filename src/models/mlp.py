@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 import jax.nn as jnn
 import equinox as eqx
 from typing import Tuple
@@ -21,6 +22,8 @@ class MLP(eqx.Module):
     """
     
     layers: list
+    mask_horizon: int
+    state_dim: int
     
     def __init__(self, n_agents: int, mask_horizon: int, state_dim: int, hidden_sizes: Tuple[int, ...], key: PRNGKeyArray):
         self.mask_horizon = mask_horizon
@@ -38,12 +41,22 @@ class MLP(eqx.Module):
             eqx.nn.Linear(hidden_sizes[1], hidden_sizes[2], key=keys[2]),
             eqx.nn.Linear(hidden_sizes[2], output_dim, key=keys[3])
         ]
-    
+
+    def _standardize_inputs(self, x: Array) -> Array:
+        ego_last_position = x[0, -1, :2]  
+        ego_last_velocity = x[0, -1, 2:]  
+        
+        other_agents = x[1:, :, :]  
+        centered_positions = other_agents[:, :, :2] - ego_last_position  
+        
+        centered_velocities = other_agents[:, :, 2:] - ego_last_velocity 
+        
+        standardized = jnp.concatenate([centered_positions, centered_velocities], axis=-1)  
+        return standardized.reshape(-1)  
+
     def _forward_single(self, x: Array) -> Array:
         """Forward pass for a single unbatched input."""
-        # normalize values relative to origin of ego agent last position
-        ego_last_position = x[self.mask_horizon * self.state_dim - 4:self.mask_horizon * self.state_dim - 2]
-
+        x = self._standardize_inputs(x)
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i < len(self.layers) - 1:

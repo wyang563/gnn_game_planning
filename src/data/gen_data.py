@@ -64,7 +64,7 @@ if __name__ == "__main__":
     # Create simulator    
     for _ in range(num_runs):
         # change arena size to be random sized
-        mag_size = random.uniform(3.0, 5.0)
+        mag_size = 3.0
         init_arena_range = (-mag_size, mag_size)
 
         simulator = Simulator(
