@@ -23,7 +23,9 @@ class MLP(eqx.Module):
     layers: list
     
     def __init__(self, n_agents: int, mask_horizon: int, state_dim: int, hidden_sizes: Tuple[int, ...], key: PRNGKeyArray):
-        input_dim = n_agents * mask_horizon * state_dim
+        self.mask_horizon = mask_horizon
+        self.state_dim = state_dim
+        input_dim = (n_agents - 1) * mask_horizon * state_dim
         output_dim = n_agents - 1
         
         # Split the key for each layer initialization
@@ -39,6 +41,9 @@ class MLP(eqx.Module):
     
     def _forward_single(self, x: Array) -> Array:
         """Forward pass for a single unbatched input."""
+        # normalize values relative to origin of ego agent last position
+        ego_last_position = x[self.mask_horizon * self.state_dim - 4:self.mask_horizon * self.state_dim - 2]
+
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i < len(self.layers) - 1:

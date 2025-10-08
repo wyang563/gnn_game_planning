@@ -6,6 +6,8 @@ logs
 example_files
 *outputs*
 *old*
+*out.txt*
+test_playground.py
 
 # cache files
 *.egg-info

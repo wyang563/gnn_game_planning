@@ -222,22 +222,31 @@ class Simulator:
         return past_x_trajs # do this so we can use them if we are collecting data
     
     # dataset creation helper methods
+    def _batch_x_trajs(self, x_trajs):
+        n_agents = x_trajs.shape[0]
+        mask_horizon = x_trajs.shape[1]
+        state_dim = x_trajs.shape[2]
+        
+        result = jnp.zeros((n_agents, n_agents, mask_horizon, state_dim))
+        
+        for i in range(n_agents):
+            result = result.at[i, 0].set(x_trajs[i])  
+            
+            other_idx = 0
+            for j in range(n_agents):
+                if j != i:  
+                    other_idx += 1
+                    result = result.at[i, other_idx].set(x_trajs[j])
+        return result
+
     def _flatten_x_trajs(self, x_trajs):
         n_agents = x_trajs.shape[0]
         mask_horizon = x_trajs.shape[1]
         state_dim = x_trajs.shape[2]
-        batch = jnp.broadcast_to(x_trajs, (n_agents, n_agents, mask_horizon, state_dim))
-        
-        result = batch.copy()
-        
-        for i in range(n_agents):
-            temp = result[i, 0].copy()
-            result = result.at[i, 0].set(result[i, i])
-            result = result.at[i, i].set(temp)
-        
-        flattened_batch = result.reshape(n_agents, n_agents * mask_horizon * state_dim)
+        batch_trajs = self._batch_x_trajs(x_trajs)
+        flattened_batch = batch_trajs.reshape(n_agents, n_agents * mask_horizon * state_dim)
         return flattened_batch
-    
+
     def save_mlp_dataset(self, data, out_file):
         # Ensure host NumPy array, contiguous float32
         batch_np = np.asarray(data, dtype=np.float32, order="C")
@@ -260,18 +269,12 @@ class Simulator:
                 )
         except:
             # Create new array with appropriate shape
-            if batch_np.ndim == 3:
-                # 3D case: (1, N, feature_dim)
-                feature_dims = (int(batch_np.shape[1]), int(batch_np.shape[2]))
-                initial_shape = (0,) + feature_dims
-                chunk_shape = (1,) + feature_dims
-            elif batch_np.ndim == 4:
-                # 4D case: (1, N, dim1, dim2)
-                feature_dims = (int(batch_np.shape[1]), int(batch_np.shape[2]), int(batch_np.shape[3]))
-                initial_shape = (0,) + feature_dims
-                chunk_shape = (1,) + feature_dims
-            else:
-                raise ValueError(f"Unsupported data dimensionality: {batch_np.ndim}D. Only 3D and 4D data are supported after expansion.")
+            feature_dims = []
+            for i in range(1, batch_np.ndim):
+                feature_dims.append(batch_np.shape[i])
+            feature_dims = tuple(feature_dims)
+            initial_shape = (0,) + feature_dims
+            chunk_shape = (1,) + feature_dims
             
             parent = os.path.dirname(out_file)
             if parent and not os.path.exists(parent):
@@ -324,8 +327,7 @@ class Simulator:
             # save model input data
             if gen_data:
                 if gen_data_configs['model_type'] == 'mlp':
-                    past_x_trajs_flattened = self._flatten_x_trajs(past_x_trajs)
-                    self.save_mlp_dataset(past_x_trajs_flattened, gen_data_configs['inputs_file'])
+                    self.save_mlp_dataset(self._batch_x_trajs(past_x_trajs), gen_data_configs['inputs_file'])
                     self.save_mlp_dataset(self.horizon_x0s, gen_data_configs['x0s_file'])
                     self.save_mlp_dataset(self.horizon_ref_trajs, gen_data_configs['ref_trajs_file'])
                 elif gen_data_configs['model_type'] == 'gnn':

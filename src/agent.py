@@ -7,7 +7,6 @@ from lqrax import iLQR
 # Configure JAX to use float32 by default for better performance
 jax.config.update("jax_default_dtype_bits", "32")
 
-
 class Agent(iLQR):
     def __init__(
         self, 
