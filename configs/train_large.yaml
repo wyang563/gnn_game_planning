@@ -6,8 +6,8 @@ mask_horizon: 10
 optimization_iters: 100
 state_dim: 4
 random_seed: 42
-sigma_1: 1.0 # weight for sparsity |M| / N for loss in NN
-sigma_2: 1.0 # weight for trajectory loss in NN
+sigma_1: 1.5 # weight for sparsity |M| / N for loss in NN
+sigma_2: 11.0 # weight for trajectory loss in NN
 dataset_dir: "src/data/mlp_n_agents_10_test"
 
 # Dynamics and cost parameters

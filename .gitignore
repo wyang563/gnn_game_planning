@@ -8,6 +8,7 @@ example_files
 *old*
 *out.txt*
 test_playground.py
+plots/
 
 # cache files
 *.egg-info

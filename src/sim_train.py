@@ -125,10 +125,10 @@ class SimulatorTrain:
         u_trajs = u_trajs + self.step_size * v_trajs
         return u_trajs
     
-    def compute_loss(self, model, inputs, x0s, ref_trajs, targets):
+    def compute_loss(self, model, inputs, x0s, ref_trajs, targets, key=None):
         """Forward pass through model and compute loss."""
         # Get player masks from model and add in ~0 entries for ego-agent
-        player_masks = model(inputs)
+        player_masks = model(inputs, key)
         final_player_masks = jnp.full((self.n_agents, self.n_agents), 1e-5, dtype=jnp.float32)
         rows = jnp.arange(self.n_agents)[:, None]
         cols = jnp.arange(self.n_agents - 1)[None, :]
@@ -176,6 +176,9 @@ class SimulatorTrain:
         output_train_dir = f"logs/train_{self.model_type}_{self.n_agents}_agents/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         os.makedirs(output_train_dir, exist_ok=True)
 
+        # Initialize PRNG key for data augmentation
+        train_key = jax.random.PRNGKey(42)
+
         for epoch in range(self.epochs):
             print(f"Epoch {epoch + 1}/{self.epochs}")
             dataloader = self.dataloader.create_jax_iterator()
@@ -183,15 +186,18 @@ class SimulatorTrain:
             num_batches = 0
             batch_loss = 0.0
             
-            for inputs, x0s, ref_trajs, targets in tqdm(dataloader, desc="Training"):
+            for inputs, x0s, ref_trajs, targets in dataloader:
                 # Squeeze batch dimension
                 inputs = inputs.squeeze(0)
                 x0s = x0s.squeeze(0)
                 ref_trajs = ref_trajs.squeeze(0)
                 targets = targets.squeeze(0)
 
+                # Split key for this batch
+                train_key, batch_key = jax.random.split(train_key)
+
                 # Compute loss and gradients using Equinox
-                loss, grads = eqx.filter_value_and_grad(self.compute_loss)(model, inputs, x0s, ref_trajs, targets)
+                loss, grads = eqx.filter_value_and_grad(self.compute_loss)(model, inputs, x0s, ref_trajs, targets, batch_key)
 
                 # Update parameters
                 updates, opt_state = optimizer.update(grads, opt_state, model)
@@ -202,8 +208,8 @@ class SimulatorTrain:
                 batch_loss += float(loss)
                 num_batches += 1
 
-                if num_batches % 50 == 0:
-                    print(f"Running Avg Loss Batch {num_batches} - Loss: {batch_loss/50:.6f}")
+                if num_batches % 20 == 0:
+                    print(f"Running Avg Loss Batch {num_batches} - Loss: {batch_loss/50:.6f}", flush=True)
                     batch_loss = 0.0
             
             # Print epoch statistics
@@ -228,7 +234,8 @@ def setup_model(
             mask_horizon=mask_horizon,
             state_dim=state_dim,
             hidden_sizes=(256, 64, 16),  # Default architecture from paper
-            key=key
+            key=key,
+            mode="train"
         )
     # TODO: add GNN model later
     else:
