@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
 
     # CHANGE THESE: gen_data_configs
-    num_runs = 3
+    num_runs = 300
     model_type = "mlp"
     mode = "test"
     gen_data_configs = None

@@ -17,6 +17,6 @@ masking:
   limit_past_horizon: True
   mask_horizon: 10
   masking_method: "MLP"
-  masking_model_path: "logs/train_mlp_10_agents/20251008_134738/model_1.eqx"
+  masking_model_path: "logs/train_mlp_10_agents/20251008_155111/model_2.eqx"
   top_k: 5
   critical_radius: 2.0

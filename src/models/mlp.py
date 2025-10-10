@@ -24,15 +24,19 @@ class MLP(eqx.Module):
     layers: list
     mask_horizon: int
     state_dim: int
+    mode: str
+    keys: PRNGKeyArray
     
-    def __init__(self, n_agents: int, mask_horizon: int, state_dim: int, hidden_sizes: Tuple[int, ...], key: PRNGKeyArray):
+    def __init__(self, n_agents: int, mask_horizon: int, state_dim: int, hidden_sizes: Tuple[int, ...], key: PRNGKeyArray, mode: str = "test"):
         self.mask_horizon = mask_horizon
         self.state_dim = state_dim
+        self.mode = mode # either test or train
         input_dim = (n_agents - 1) * mask_horizon * state_dim
         output_dim = n_agents - 1
         
         # Split the key for each layer initialization
         keys = jax.random.split(key, 4)
+        self.keys = keys
         
         # Create layers
         self.layers = [
@@ -42,14 +46,20 @@ class MLP(eqx.Module):
             eqx.nn.Linear(hidden_sizes[2], output_dim, key=keys[3])
         ]
 
+    def _rotation_augmentation(self, points: Array, theta: float) -> Array:
+        rotation_matrix = jnp.array([[jnp.cos(theta), -jnp.sin(theta)], [jnp.sin(theta), jnp.cos(theta)]])
+        return jnp.einsum('ij,jk->ik', points, rotation_matrix)
+
     def _standardize_inputs(self, x: Array) -> Array:
         ego_last_position = x[0, -1, :2]  
-        ego_last_velocity = x[0, -1, 2:]  
-        
         other_agents = x[1:, :, :]  
         centered_positions = other_agents[:, :, :2] - ego_last_position  
-        
-        centered_velocities = other_agents[:, :, 2:] - ego_last_velocity 
+        centered_velocities = other_agents[:, :, 2:]  
+
+        if self.mode == "train":
+            theta = jax.random.uniform(self.keys[0], (1,)) * 2 * jnp.pi
+            centered_positions = self._rotation_augmentation(centered_positions, theta)
+            centered_velocities = self._rotation_augmentation(centered_velocities, theta)
         
         standardized = jnp.concatenate([centered_positions, centered_velocities], axis=-1)  
         return standardized.reshape(-1)  
@@ -57,6 +67,9 @@ class MLP(eqx.Module):
     def _forward_single(self, x: Array) -> Array:
         """Forward pass for a single unbatched input."""
         x = self._standardize_inputs(x)
+        if self.mode == "train":
+            x = self._rotation_augmentation(x)
+
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i < len(self.layers) - 1:

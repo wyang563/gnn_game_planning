@@ -324,8 +324,8 @@ class Simulator:
             # calculate mask of other agents to consider for each agent
             past_x_trajs = self.run_masking_method(self.masking_method, iter_timestep, x_trajs)
 
-            # save model input data
-            if gen_data:
+            # save model input data, we only save data every 20 time steps so we don't over populate our data with one particular trajectory from a scene
+            if gen_data and iter_timestep % 20 == 0:
                 if gen_data_configs['model_type'] == 'mlp':
                     self.save_mlp_dataset(self._batch_x_trajs(past_x_trajs), gen_data_configs['inputs_file'])
                     self.save_mlp_dataset(self.horizon_x0s, gen_data_configs['x0s_file'])
@@ -374,7 +374,7 @@ class Simulator:
             self.u_trajs = self.u_trajs.at[:, iter_timestep, :].set(self.horizon_u_trajs[:, 0, :])
 
             # write out data for trajectories we took over horizon
-            if gen_data:
+            if gen_data and iter_timestep % 20 == 0:
                 horizon_x_trajs, _, _ = self.jit_batched_linearize_dyn(self.horizon_x0s, self.horizon_u_trajs)
                 if gen_data_configs['model_type'] == 'mlp':
                     self.save_mlp_dataset(horizon_x_trajs, gen_data_configs['targets_file'])
