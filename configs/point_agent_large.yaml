@@ -6,8 +6,8 @@ simulator:
   init_arena_range: [-3.0, 3.0]
   init_type: "origin"
   goal_threshold: 0.2
-  device: "cuda"
-  optimization_iters: 100
+  device: "cpu"
+  optimization_iters: 50
   step_size: 0.002
   W: [100.0, 5.0, 0.1, 1.0] # w1 = collision, w2 = collision cost exp decay, w3 = control, w4 = navigation
   Q: [0.1, 0.1, 0.001, 0.001] # Higher position weights
@@ -17,6 +17,6 @@ masking:
   limit_past_horizon: True
   mask_horizon: 10
   masking_method: "MLP"
-  masking_model_path: "logs/train_mlp_10_agents/20251009_211603/model_0.eqx"
+  masking_model_path: "logs/train_mlp_10_agents/20251011_145226/model_0.eqx"
   top_k: 5
   critical_radius: 2.0

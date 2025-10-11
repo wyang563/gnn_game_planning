@@ -1,13 +1,14 @@
 model_type: "mlp"
 epochs: 10
-learning_rate: 0.005
+learning_rate: 0.0005
 n_agents: 10
 mask_horizon: 10
 optimization_iters: 100
 state_dim: 4
-random_seed: 42
+random_seed: 563
 sigma_1: 1.5 # weight for sparsity |M| / N for loss in NN
 sigma_2: 11.0 # weight for trajectory loss in NN
+sigma_3: 10.0 # weight for collision loss in NN
 dataset_dir: "src/data/mlp_n_agents_10_test"
 
 # Dynamics and cost parameters

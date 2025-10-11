@@ -37,6 +37,7 @@ class SimulatorTrain:
         
         self.sigma_1 = kwargs["sigma_1"]
         self.sigma_2 = kwargs["sigma_2"]
+        self.sigma_3 = kwargs["sigma_3"]
         self.optimization_iters = kwargs["optimization_iters"]
 
         # setup dataset
@@ -125,10 +126,10 @@ class SimulatorTrain:
         u_trajs = u_trajs + self.step_size * v_trajs
         return u_trajs
     
-    def compute_loss(self, model, inputs, x0s, ref_trajs, targets, key=None):
+    def compute_loss(self, model, inputs, x0s, ref_trajs, targets):
         """Forward pass through model and compute loss."""
         # Get player masks from model and add in ~0 entries for ego-agent
-        player_masks = model(inputs, key)
+        player_masks = model(inputs)
         final_player_masks = jnp.full((self.n_agents, self.n_agents), 1e-5, dtype=jnp.float32)
         rows = jnp.arange(self.n_agents)[:, None]
         cols = jnp.arange(self.n_agents - 1)[None, :]
@@ -162,9 +163,18 @@ class SimulatorTrain:
         
         total_loss = binary_loss + mask_loss + sim_loss
 
-        # if self.debug:
-        #     jax.debug.print("binary_loss: {binary_loss}, mask_loss: {mask_loss}, sim_loss: {sim_loss}", binary_loss=binary_loss, mask_loss=mask_loss, sim_loss=sim_loss)
-        return jnp.sum(total_loss)
+        # collision loss
+        x_pos = x_trajs[:, :, :2]
+        diffs = x_pos[None, :, :, :] - x_pos[:, None, :, :]
+        squared_distances = jnp.sum(jnp.square(diffs), axis=-1)
+        mask = ~jnp.eye(self.n_agents, dtype=bool)
+        mask = mask.astype(jnp.int32)
+        mask = jnp.tile(mask[:, :, None], (1, 1, horizon_size))
+
+        squared_distances = jnp.where(mask, squared_distances, 1e3) # here we set 1e3 which is basically infinite distance away
+        collision_loss = self.sigma_3 * jnp.sum(jnp.exp(-self.W[1] * squared_distances), axis=-1) 
+
+        return jnp.sum(total_loss) + jnp.sum(collision_loss)
 
     def train(
             self, 
@@ -175,9 +185,6 @@ class SimulatorTrain:
         
         output_train_dir = f"logs/train_{self.model_type}_{self.n_agents}_agents/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         os.makedirs(output_train_dir, exist_ok=True)
-
-        # Initialize PRNG key for data augmentation
-        train_key = jax.random.PRNGKey(42)
 
         for epoch in range(self.epochs):
             print(f"Epoch {epoch + 1}/{self.epochs}")
@@ -193,11 +200,11 @@ class SimulatorTrain:
                 ref_trajs = ref_trajs.squeeze(0)
                 targets = targets.squeeze(0)
 
-                # Split key for this batch
-                train_key, batch_key = jax.random.split(train_key)
+                # # Split key for this batch
+                # train_key, batch_key = jax.random.split(train_key)
 
                 # Compute loss and gradients using Equinox
-                loss, grads = eqx.filter_value_and_grad(self.compute_loss)(model, inputs, x0s, ref_trajs, targets, batch_key)
+                loss, grads = eqx.filter_value_and_grad(self.compute_loss)(model, inputs, x0s, ref_trajs, targets)
 
                 # Update parameters
                 updates, opt_state = optimizer.update(grads, opt_state, model)
@@ -209,7 +216,7 @@ class SimulatorTrain:
                 num_batches += 1
 
                 if num_batches % 20 == 0:
-                    print(f"Running Avg Loss Batch {num_batches} - Loss: {batch_loss/50:.6f}", flush=True)
+                    print(f"Running Avg Loss Batch {num_batches} - Loss: {batch_loss/20:.6f}", flush=True)
                     batch_loss = 0.0
             
             # Print epoch statistics
@@ -275,6 +282,7 @@ if __name__ == "__main__":
         dataset_dir=config["dataset_dir"],
         sigma_1=config["sigma_1"],
         sigma_2=config["sigma_2"],
+        sigma_3=config["sigma_3"],
         optimization_iters=config["optimization_iters"],
         dt=config["dt"],
         step_size=config["step_size"],

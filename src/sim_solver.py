@@ -414,6 +414,14 @@ if __name__ == "__main__":
     init_arena_range = tuple(simulator_config['init_arena_range'])  # Initial position range
     goal_threshold = simulator_config['goal_threshold']  # Convergence threshold
     device = simulator_config['device']
+
+    # change device if gpu isn't avaliable
+    cuda_devs = jax.devices("cuda")
+    if len(cuda_devs) > 0:
+        device = "cuda"
+    else:
+        device = "cpu"
+
     optimization_iters = simulator_config['optimization_iters']  # Total simulation steps
     step_size = simulator_config['step_size']
     init_type = simulator_config['init_type']

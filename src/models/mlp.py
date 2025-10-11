@@ -4,6 +4,8 @@ import jax.nn as jnn
 import equinox as eqx
 from typing import Tuple, Optional
 from jaxtyping import Array, PRNGKeyArray
+import matplotlib.pyplot as plt
+import numpy as np
 
 class MLP(eqx.Module):
     """
@@ -15,7 +17,7 @@ class MLP(eqx.Module):
             or unbatched [10]
     
     Architecture:
-    - Input layer: 360 -> 256 (ReLU)
+    - Input layer: 400 -> 256 (ReLU)
     - Hidden layer 1: 256 -> 64 (ReLU) 
     - Hidden layer 2: 64 -> 16 (ReLU)
     - Output layer: 16 -> 9 (Sigmoid)
@@ -44,26 +46,18 @@ class MLP(eqx.Module):
             eqx.nn.Linear(hidden_sizes[2], output_dim, key=keys[3])
         ]
 
-    def _rotation_augmentation(self, points: Array, theta: float) -> Array:
-        rotation_matrix = jnp.array([[jnp.cos(theta), -jnp.sin(theta)], [jnp.sin(theta), jnp.cos(theta)]])
-        return jnp.einsum('...i,ij->...j', points, rotation_matrix)
-
-    def _standardize_inputs(self, x: Array, key: Optional[PRNGKeyArray] = None) -> Array:
+    def _standardize_inputs(self, x: Array) -> Array:
         ego_last_position = x[0, -1, :2]  
+        ego_last_velocity = x[0, -1, 2:]
         centered_positions = x[:, :, :2] - ego_last_position  
-        centered_velocities = x[:, :, 2:]  
+        centered_velocities = x[:, :, 2:] - ego_last_velocity  
 
-        if self.mode == "train" and key is not None:
-            theta = jax.random.uniform(key, ()) * 2 * jnp.pi
-            centered_positions = self._rotation_augmentation(centered_positions, theta)
-            centered_velocities = self._rotation_augmentation(centered_velocities, theta)
-        
         standardized = jnp.concatenate([centered_positions, centered_velocities], axis=-1)  
         return standardized.reshape(-1)  
 
-    def _forward_single(self, x: Array, key: Optional[PRNGKeyArray] = None) -> Array:
+    def _forward_single(self, x: Array) -> Array:
         """Forward pass for a single unbatched input."""
-        x = self._standardize_inputs(x, key)
+        x = self._standardize_inputs(x)
 
         for i, layer in enumerate(self.layers):
             x = layer(x)
@@ -73,7 +67,7 @@ class MLP(eqx.Module):
                 x = jnn.sigmoid(x)
         return x
     
-    def __call__(self, x: Array, key: Optional[PRNGKeyArray] = None) -> Array:
+    def __call__(self, x: Array) -> Array: 
         """Forward pass that handles both batched and unbatched inputs.
         
         Args:
@@ -81,16 +75,42 @@ class MLP(eqx.Module):
             key: Optional PRNG key for data augmentation during training
         """
         # Check if input is batched (2D) or unbatched (1D)
+        # visualize centered positions
         if x.ndim == 1:
             # Unbatched input: shape (input_dim,)
-            return self._forward_single(x, key)
+            return self._forward_single(x)
         else:
             # Batched input: shape (batch, input_dim)
-            if key is not None:
-                # Split key for each sample in the batch
-                batch_size = x.shape[0]
-                keys = jax.random.split(key, batch_size)
-                return jax.vmap(self._forward_single)(x, keys)
-            else:
-                # No key needed (test mode or no augmentation)
-                return jax.vmap(lambda sample: self._forward_single(sample, None))(x)
+            return jax.vmap(lambda sample: self._forward_single(sample))(x)
+    
+    def visualize_centered_positions(self, x: Array):
+        """
+        Visualize the centered positions from the input data.
+        
+        Args:
+            x: Input array of shape [num_agents, mask_horizon, state_dim]
+            save_path: Optional path to save the plot
+            title: Title for the plot
+        """
+        
+        # Extract centered positions
+        ego_last_position = x[0, -1, :2]  
+        centered_positions = x[:, :, :2] - ego_last_position
+        centered_positions = np.asarray(centered_positions)
+        _, ax = plt.subplots(1, 1, figsize=(14, 10))
+        for i in range(centered_positions.shape[0]):
+            color = f'C{i}'
+            past_x = centered_positions[i, :, 0]
+            past_y = centered_positions[i, :, 1]
+            ax.plot(past_x, past_y, ':', alpha=0.7, linewidth=2, color=color, 
+                    label=f'Agent {i}')
+
+        ax.set_xlabel('X Position', fontsize=12)
+        ax.set_ylabel('Y Position', fontsize=12)
+        ax.set_title("Centered Past Positions", fontsize=14)
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        ax.axis('equal')
+        
+        plt.tight_layout()
+        plt.savefig("plots/centered_past_positions.png", dpi=300, bbox_inches='tight')
