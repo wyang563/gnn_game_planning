@@ -9,6 +9,7 @@ example_files
 *out.txt*
 test_playground.py
 plots/
+reference_trajectories_*
 
 # cache files
 *.egg-info

@@ -20,6 +20,7 @@ class MLPDataset:
         targets_path: str,
         x0s_path: str,
         ref_trajs_path: str,
+        batch_size: int = 1,
         shuffle_buffer: int = 1000,
         prefetch_size: int = 2
     ):
@@ -31,7 +32,7 @@ class MLPDataset:
             targets_path: Path to Zarr array containing target data
             x0s_path: Path to Zarr array containing initial states
             ref_trajs_path: Path to Zarr array containing reference trajectories
-            batch_size: Number of samples per batch (will be forced to 1)
+            batch_size: Number of samples per batch
             shuffle_buffer: Size of shuffle buffer for randomization
             prefetch_size: Number of batches to prefetch
         """
@@ -39,7 +40,7 @@ class MLPDataset:
         self.targets_path = targets_path
         self.x0s_path = x0s_path
         self.ref_trajs_path = ref_trajs_path
-        self.batch_size = 1  # Always use batch size of 1
+        self.batch_size = batch_size
         self.shuffle_buffer = shuffle_buffer
         self.prefetch_size = prefetch_size
         
@@ -108,7 +109,7 @@ class MLPDataset:
         Create a TensorFlow dataset from the Zarr data.
         
         Returns:
-            tf.data.Dataset that yields (inputs, x0s, ref_trajs, targets) batches with shape [1, N, ...]
+            tf.data.Dataset that yields (inputs, x0s, ref_trajs, targets) batches with shape [batch_size, N, ...]
         """
         # Create dataset from generator
         dataset = tf.data.Dataset.from_generator(
@@ -123,7 +124,7 @@ class MLPDataset:
         
         # Apply transformations
         dataset = dataset.shuffle(self.shuffle_buffer)
-        dataset = dataset.batch(self.batch_size, drop_remainder=False)  # batch_size is always 1
+        dataset = dataset.batch(self.batch_size, drop_remainder=False)
         dataset = dataset.prefetch(self.prefetch_size)
         
         return dataset
@@ -168,6 +169,7 @@ def create_mlp_dataloader(
     targets_path: str,
     x0s_path: str,
     ref_trajs_path: str,
+    batch_size: int = 1,
     shuffle_buffer: int = 1000,
     prefetch_size: int = 2
 ) -> MLPDataset:
@@ -191,6 +193,7 @@ def create_mlp_dataloader(
         targets_path=targets_path,
         x0s_path=x0s_path,
         ref_trajs_path=ref_trajs_path,
+        batch_size=batch_size,
         shuffle_buffer=shuffle_buffer,
         prefetch_size=prefetch_size
     )

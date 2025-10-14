@@ -44,6 +44,7 @@ class SimulatorTrain:
         self.dataloader = self._setup_dataloader(
             model_type=kwargs["model_type"],
             dataset_path=kwargs["dataset_dir"],
+            batch_size=kwargs["batch_size"],
         )
         
         # Setup batched agent functions for optimization
@@ -54,6 +55,7 @@ class SimulatorTrain:
         self,
         model_type: str,
         dataset_path: str,
+        batch_size: int,
     ):
         if model_type == "mlp":
             return create_mlp_dataloader(
@@ -62,6 +64,7 @@ class SimulatorTrain:
                 x0s_path=os.path.join(dataset_path, "x0s.zarr"),
                 ref_trajs_path=os.path.join(dataset_path, "ref_trajs.zarr"),
                 shuffle_buffer=500,
+                batch_size=batch_size,
             )
         else:
             raise ValueError(f"Model type {model_type} not supported")
@@ -152,29 +155,35 @@ class SimulatorTrain:
         x_trajs, _, _ = self.jit_batched_linearize_dyn(x0s, u_trajs)
         
         # Compute loss
-        binary_loss = jnp.sum(jnp.abs(0.5 - jnp.abs(0.5 - final_player_masks)), axis=-1)
-        mask_loss = self.sigma_1 * jnp.sum(jnp.abs(final_player_masks), axis=-1) / final_player_masks.shape[0]
+        binary_raw = jnp.sum(jnp.abs(0.5 - jnp.abs(0.5 - final_player_masks)), axis=-1)
+        binary_loss = jnp.mean(binary_raw)
+
+        mask_raw = self.sigma_1 * jnp.mean(jnp.abs(final_player_masks), axis=-1) 
+        mask_loss = jnp.mean(mask_raw)
+
         x_pos = x_trajs[:, :, :2]
         target_pos = targets[:, :, :2]
 
         # sim loss
         d2 = jnp.square(x_pos - target_pos).sum(axis=-1)
-        sim_loss = self.sigma_2 * jnp.sqrt(d2 + 1e-8).sum(axis=-1)
+        sim_raw = self.sigma_2 * jnp.sqrt(d2 + 1e-8).mean(axis=-1)
+        sim_loss = jnp.mean(sim_raw)
         
         total_loss = binary_loss + mask_loss + sim_loss
 
         # collision loss
-        x_pos = x_trajs[:, :, :2]
-        diffs = x_pos[None, :, :, :] - x_pos[:, None, :, :]
-        squared_distances = jnp.sum(jnp.square(diffs), axis=-1)
-        mask = ~jnp.eye(self.n_agents, dtype=bool)
-        mask = mask.astype(jnp.int32)
-        mask = jnp.tile(mask[:, :, None], (1, 1, horizon_size))
+        # x_pos = x_trajs[:, :, :2]
+        # diffs = x_pos[None, :, :, :] - x_pos[:, None, :, :]
+        # squared_distances = jnp.sum(jnp.square(diffs), axis=-1)
+        # mask = ~jnp.eye(self.n_agents, dtype=bool)
+        # mask = mask.astype(jnp.int32)
+        # mask = jnp.tile(mask[:, :, None], (1, 1, horizon_size))
 
-        squared_distances = jnp.where(mask, squared_distances, 1e3) # here we set 1e3 which is basically infinite distance away
-        collision_loss = self.sigma_3 * jnp.sum(jnp.exp(-self.W[1] * squared_distances), axis=-1) 
+        # squared_distances = jnp.where(mask, squared_distances, 1e3) # here we set 1e3 which is basically infinite distance away
+        # collision_loss = self.sigma_3 * jnp.sum(jnp.exp(-self.W[1] * squared_distances), axis=-1) 
 
-        return jnp.sum(total_loss) + jnp.sum(collision_loss)
+        # return jnp.sum(total_loss) + jnp.sum(collision_loss)
+        return jnp.sum(total_loss)
 
     def train(
             self, 
@@ -200,9 +209,6 @@ class SimulatorTrain:
                 ref_trajs = ref_trajs.squeeze(0)
                 targets = targets.squeeze(0)
 
-                # # Split key for this batch
-                # train_key, batch_key = jax.random.split(train_key)
-
                 # Compute loss and gradients using Equinox
                 loss, grads = eqx.filter_value_and_grad(self.compute_loss)(model, inputs, x0s, ref_trajs, targets)
 
@@ -218,14 +224,15 @@ class SimulatorTrain:
                 if num_batches % 20 == 0:
                     print(f"Running Avg Loss Batch {num_batches} - Loss: {batch_loss/20:.6f}", flush=True)
                     batch_loss = 0.0
+                
+                if num_batches % 100 == 0:
+                    print(f"Example mask: {model(inputs)}", flush=True)
             
             # Print epoch statistics
             eqx.tree_serialise_leaves(os.path.join(output_train_dir, f"model_{epoch}.eqx"), model)
 
             avg_loss = epoch_loss / num_batches
             print(f"Epoch {epoch + 1}/{self.epochs} - Average Loss: {avg_loss:.6f}")
-        
-        return model
 
 def setup_model(
     model_type: str,
@@ -275,6 +282,7 @@ if __name__ == "__main__":
 
     trainer = SimulatorTrain(
         model_type=config["model_type"],
+        batch_size=config["batch_size"],
         n_agents=config["n_agents"],
         mask_horizon=config["mask_horizon"],
         random_seed=config["random_seed"],
@@ -292,5 +300,5 @@ if __name__ == "__main__":
         debug=DEBUG,
     )
 
-    final_model = trainer.train(model=model, optimizer=optimizer, opt_state=opt_state) 
+    trainer.train(model=model, optimizer=optimizer, opt_state=opt_state) 
     
