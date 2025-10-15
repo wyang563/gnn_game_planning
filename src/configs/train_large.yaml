@@ -11,9 +11,10 @@ sigma_1: 1.0 # weight for sparsity |M| / N for loss in NN
 sigma_2: 1.0 # weight for trajectory loss in NN
 sigma_3: 1.0 # weight for collision loss in NN
 dataset_dir: "src/data/mlp_n_agents_10_test"
+max_grad_norm: 1.0
 
 # Dynamics and cost parameters
-dt: 0.05
+dt: 0.1
 step_size: 0.002
 Q: [0.1, 0.1, 0.001, 0.001] # State cost weights (position, velocity)
 R: [0.01, 0.01] # Control cost weights

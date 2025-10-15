@@ -3,6 +3,7 @@ src/data/vci-dataset-citr
 src/data/mlp_n_agents_*
 src/data/gnn*
 logs
+log
 example_files
 *outputs*
 *old*

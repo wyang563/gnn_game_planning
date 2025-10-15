@@ -327,7 +327,7 @@ class Simulator:
             # save model input data, we only save data every 20 time steps so we don't over populate our data with one particular trajectory from a scene
             if gen_data and iter_timestep % 20 == 0:
                 if gen_data_configs['model_type'] == 'mlp':
-                    self.save_mlp_dataset(self._batch_x_trajs(past_x_trajs), gen_data_configs['inputs_file'])
+                    self.save_mlp_dataset(past_x_trajs, gen_data_configs['inputs_file'])
                     self.save_mlp_dataset(self.horizon_x0s, gen_data_configs['x0s_file'])
                     self.save_mlp_dataset(self.horizon_ref_trajs, gen_data_configs['ref_trajs_file'])
                 elif gen_data_configs['model_type'] == 'gnn':

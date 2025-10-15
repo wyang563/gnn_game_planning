@@ -207,7 +207,8 @@ if __name__ == "__main__":
         targets_path="src/data/mlp_n_agents_10_test/targets.zarr",
         x0s_path="src/data/mlp_n_agents_10_test/x0s.zarr",
         ref_trajs_path="src/data/mlp_n_agents_10_test/ref_trajs.zarr",
-        shuffle_buffer=500
+        shuffle_buffer=500,
+        batch_size=16
     )
     
     # Test the dataloader

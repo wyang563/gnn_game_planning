@@ -1,87 +1,74 @@
 import jax
 import jax.numpy as jnp
 import jax.nn as jnn
-import equinox as eqx
+# import equinox as eqx
 from typing import Tuple, Optional
 from jaxtyping import Array, PRNGKeyArray
 import matplotlib.pyplot as plt
 import numpy as np
+from flax import linen as nn
 
-class MLP(eqx.Module):
+class MLP(nn.Module):
     """
-    Multi-Layer Perceptron for processing past player trajectories using Equinox.
+    Player Selection Network (PSN) that learns to select important agents and infer their goals.
     
-    Input: Flattened trajectories of shape [batch, (n_agents - 1) * mask_horizon * 4] = [batch, 360]
-           or unbatched [400]
-    Output: Per-agent predictions of shape [batch, n_agents] = [batch, 10] with values in range [0, 1]
-            or unbatched [10]
-    
-    Architecture:
-    - Input layer: 400 -> 256 (ReLU)
-    - Hidden layer 1: 256 -> 64 (ReLU) 
-    - Hidden layer 2: 64 -> 16 (ReLU)
-    - Output layer: 16 -> 9 (Sigmoid)
+    Input: First 10 steps of all agents' trajectories (T_observation * N_agents * state_dim)
+    Output: 
+        - Binary mask for selecting other agents (excluding ego agent)
+        - Goal positions for all agents (including ego agent)
     """
     
-    layers: list
-    mask_horizon: int
-    state_dim: int
-    mode: str
+    hidden_dim: int = 128
+    n_agents: int = 10
+    mask_horizon: int = 10
+    state_dim: int = 4
+    mask_output_dim: int = n_agents - 1  # Mask for other agents (excluding ego)
     
-    def __init__(self, n_agents: int, mask_horizon: int, state_dim: int, hidden_sizes: Tuple[int, ...], key: PRNGKeyArray, mode: str = "test"):
+    def __init__(self, n_agents: int, mask_horizon: int, state_dim: int, hidden_dim: int):
+        super().__init__()
+        self.n_agents = n_agents
         self.mask_horizon = mask_horizon
         self.state_dim = state_dim
-        self.mode = mode # either test or train
-        input_dim = n_agents * mask_horizon * state_dim
-        output_dim = n_agents - 1
-        
-        # Split the key for each layer initialization
-        keys = jax.random.split(key, 4)
-        
-        # Create layers
-        self.layers = [
-            eqx.nn.Linear(input_dim, hidden_sizes[0], key=keys[0]),
-            eqx.nn.Linear(hidden_sizes[0], hidden_sizes[1], key=keys[1]),
-            eqx.nn.Linear(hidden_sizes[1], hidden_sizes[2], key=keys[2]),
-            eqx.nn.Linear(hidden_sizes[2], output_dim, key=keys[3])
-        ]
+        self.mask_output_dim = n_agents - 1
+        self.hidden_dim = hidden_dim
 
-    def _standardize_inputs(self, x: Array) -> Array:
-        ego_last_position = x[0, -1, :2]  
-        ego_last_velocity = x[0, -1, 2:]
-        centered_positions = x[:, :, :2] - ego_last_position  
-        centered_velocities = x[:, :, 2:] - ego_last_velocity  
-
-        standardized = jnp.concatenate([centered_positions, centered_velocities], axis=-1)  
-        return standardized.reshape(-1)  
-
-    def _forward_single(self, x: Array) -> Array:
-        """Forward pass for a single unbatched input."""
-        x = self._standardize_inputs(x)
-
-        for i, layer in enumerate(self.layers):
-            x = layer(x)
-            if i < len(self.layers) - 1:
-                x = jnn.relu(x)
-            else:
-                x = jnn.sigmoid(x)
-        return x
-    
-    def __call__(self, x: Array) -> Array: 
-        """Forward pass that handles both batched and unbatched inputs.
+    @nn.compact
+    def __call__(self, x):
+        """
+        Forward pass of PSN.
         
         Args:
-            x: Input array (batched or unbatched)
-            key: Optional PRNG key for data augmentation during training
+            x: Input tensor of shape (batch_size, T_observation * N_agents * state_dim)
+               Flattened observation trajectories
+            
+        Returns:
+            tuple: (mask, goals) where:
+                - mask: Binary mask of shape (batch_size, N_agents - 1)
+                - goals: Goal positions of shape (batch_size, N_agents * 2)
         """
-        # Check if input is batched (2D) or unbatched (1D)
-        # visualize centered positions
-        if x.ndim == 1:
-            # Unbatched input: shape (input_dim,)
-            return self._forward_single(x)
-        else:
-            # Batched input: shape (batch, input_dim)
-            return jax.vmap(lambda sample: self._forward_single(sample))(x)
+        # Reshape input to (batch_size, T_observation, N_agents, state_dim)
+        batch_size = x.shape[0]
+        x = x.reshape(batch_size, self.mask_horizon, self.n_agents, self.state_dim)
+        
+        # Average over time steps to get a summary representation
+        x = jnp.mean(x, axis=1)  # (batch_size, N_agents, state_dim)
+        
+        # Flatten all agent states
+        x = x.reshape(batch_size, self.n_agents * self.state_dim)
+        
+        # Shared feature extraction layers
+        x = nn.Dense(features=self.hidden_dim)(x)
+        x = nn.relu(x)
+        x = nn.Dense(features=self.hidden_dim // 2)(x)
+        x = nn.relu(x)
+        
+        # Branch into two outputs: mask and goals
+        # Mask branch (for agent selection)
+        mask_branch = nn.Dense(features=self.hidden_dim // 4)(x)
+        mask_branch = nn.relu(mask_branch)
+        mask = nn.Dense(features=self.mask_output_dim)(mask_branch)
+        mask = nn.sigmoid(mask)  # Binary mask
+        return mask
     
     def visualize_centered_positions(self, x: Array):
         """
