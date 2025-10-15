@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import jax.nn as jnn
 # import equinox as eqx
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 from jaxtyping import Array, PRNGKeyArray
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,20 +18,12 @@ class MLP(nn.Module):
         - Goal positions for all agents (including ego agent)
     """
     
-    hidden_dim: int = 128
+    hidden_dims: List[int]
     n_agents: int = 10
     mask_horizon: int = 10
     state_dim: int = 4
-    mask_output_dim: int = n_agents - 1  # Mask for other agents (excluding ego)
+    mask_output_dim: int = n_agents - 1  # Mask for other agents (excluding ego agent)
     
-    def __init__(self, n_agents: int, mask_horizon: int, state_dim: int, hidden_dim: int):
-        super().__init__()
-        self.n_agents = n_agents
-        self.mask_horizon = mask_horizon
-        self.state_dim = state_dim
-        self.mask_output_dim = n_agents - 1
-        self.hidden_dim = hidden_dim
-
     @nn.compact
     def __call__(self, x):
         """
@@ -57,16 +49,13 @@ class MLP(nn.Module):
         x = x.reshape(batch_size, self.n_agents * self.state_dim)
         
         # Shared feature extraction layers
-        x = nn.Dense(features=self.hidden_dim)(x)
+        x = nn.Dense(features=self.hidden_dims[0])(x)
         x = nn.relu(x)
-        x = nn.Dense(features=self.hidden_dim // 2)(x)
+        x = nn.Dense(features=self.hidden_dims[1])(x)
         x = nn.relu(x)
-        
-        # Branch into two outputs: mask and goals
-        # Mask branch (for agent selection)
-        mask_branch = nn.Dense(features=self.hidden_dim // 4)(x)
-        mask_branch = nn.relu(mask_branch)
-        mask = nn.Dense(features=self.mask_output_dim)(mask_branch)
+        x = nn.Dense(features=self.hidden_dims[2])(x)
+        x = nn.relu(x)
+        mask = nn.Dense(features=self.mask_output_dim)(x)
         mask = nn.sigmoid(mask)  # Binary mask
         return mask
     

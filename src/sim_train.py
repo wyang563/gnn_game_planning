@@ -118,7 +118,7 @@ class SimulatorTrain:
         )
         
         # # Setup batched agent functions for optimization
-        # self._setup_batched_agent_functions()
+        self._setup_batched_functions()
         self.debug = kwargs["debug"]
 
     def _setup_batched_functions(self):
@@ -191,12 +191,14 @@ class SimulatorTrain:
 
     def solve_masked_game_differentiable(self, sim_x0s, sim_ref_trajs, mask):
         # adjust masks such that they are n_agents long
-        masks = ~jnp.eye(self.n_agents, dtype=bool).astype(jnp.float32)
-        masks[self.ego_agent_id, 1:] = mask # mask for ego agent is equal to the mask we solved for
+        masks = (~jnp.eye(self.n_agents, dtype=bool)).astype(jnp.float32)
+        non_ego_indices = jnp.arange(1, self.n_agents)
+        masks = masks.at[self.ego_agent_id, non_ego_indices].set(mask)
+
+        horizon = sim_ref_trajs.shape[1]
         masks_for_step = jnp.tile(masks[:, None, :], (1, horizon, 1))
 
         # solve masked game over optimization iters
-        horizon = sim_ref_trajs.shape[1]
         u_trajs = jnp.zeros((self.n_agents, horizon, 2))
         for _ in range(self.optimization_iters):
             x_trajs, A_trajs, B_trajs = self.jit_batched_linearize_dyn(sim_x0s, u_trajs)
@@ -232,9 +234,12 @@ class SimulatorTrain:
 
     def train_step(self, state: train_state.TrainState, inputs, x0s, ref_trajs, targets):
         def loss_fn(params):
-            predicted_masks = state.apply_fn({'params': state.params}, inputs)
+            predicted_masks = state.apply_fn({'params': params}, inputs)
             binary_loss_val = self.binary_loss(predicted_masks)
             mask_sparsity_loss_val = self.mask_sparsity_loss(predicted_masks)
+            sim_loss = self.batch_sim_loss(predicted_masks, x0s, ref_trajs, targets)
+            total_loss = binary_loss_val + self.sigma_1 * mask_sparsity_loss_val + self.sigma_2 * sim_loss
+            return total_loss, (binary_loss_val, mask_sparsity_loss_val, sim_loss)
 
         (loss, loss_comps), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
         grad_norm = jax.tree_util.tree_reduce(lambda x, y: x + jnp.sum(jnp.square(y)), grads, initializer=0.0)
@@ -243,7 +248,7 @@ class SimulatorTrain:
         max_grad_norm = self.max_grad_norm
         if grad_norm > max_grad_norm:
             scale = max_grad_norm / grad_norm
-            grads = jax.tree_map(lambda g: g * scale, grads)
+            grads = jax.tree.map(lambda g: g * scale, grads)
         
         # Apply gradients using the optimizer
         state = state.apply_gradients(grads=grads)
@@ -296,7 +301,8 @@ class SimulatorTrain:
                     batch_loss = 0.0
                 
                 if num_batches % 100 == 0:
-                    print(f"Example mask: {model(inputs)}", flush=True)
+                    example_mask = state.apply_fn({'params': state.params}, inputs)
+                    print(f"Example mask: {example_mask}", flush=True)
             
 
             avg_loss = epoch_loss / num_batches
@@ -309,12 +315,8 @@ def setup_model(
     mask_horizon: int,
 ):
     if model_type == "mlp":
-        return MLP(
-            n_agents=n_agents,
-            mask_horizon=mask_horizon,
-            state_dim=state_dim,
-            hidden_dim=128,
-        )
+        model = MLP(hidden_dims=[128, 64, 32], n_agents=n_agents, mask_horizon=mask_horizon, state_dim=state_dim)
+        return model
     # TODO: add GNN model later
     else:
         raise ValueError(f"Model type {model_type} not supported")
@@ -338,7 +340,6 @@ if __name__ == "__main__":
         state_dim=config["state_dim"],
         n_agents=config["n_agents"],
         mask_horizon=config["mask_horizon"],
-        random_seed=config["random_seed"],
     )
 
     optimizer = optax.adam(learning_rate=config["learning_rate"])
@@ -357,6 +358,7 @@ if __name__ == "__main__":
         sigma_3=config["sigma_3"],
         optimization_iters=config["optimization_iters"],
         dt=config["dt"],
+        state_dim=config["state_dim"],
         step_size=config["step_size"],
         Q=config["Q"],
         R=config["R"],
