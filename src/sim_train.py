@@ -7,14 +7,14 @@ import optax
 from flax import linen as nn
 from flax.training import train_state
 from utils.utils import load_config, parse_arguments
-from tqdm import tqdm
 from models.policies import *
 from models.mlp import MLP
 from data.mlp_dataset import create_mlp_dataloader
 import os
-from agent import Agent
 from datetime import datetime
 from lqrax import iLQR
+import matplotlib.pyplot as plt
+import numpy as np
 
 # Configure JAX to use CPU if CUDA has issues
 try:
@@ -57,15 +57,10 @@ class PointAgent(iLQR):
         squared_distances = jnp.sum(jnp.square(current_position - other_xts), axis=1)
         collision_loss = self.w1 * jnp.exp(-self.w2 * squared_distances)
         # Apply mask to collision loss, not distance
-        # differentiably clamp values to close to 0 or 1 using formula: 0.5 * (1 + tanh(10 * (mask - 0.5)))
-        eps = 1e-6
-        # alpha = 16.0
+        # alpha = 2.0
         # modified_mask = jax.nn.sigmoid(alpha * (mask - 0.5))
-        # collision_loss = collision_loss * modified_mask 
-        collision_loss = collision_loss * mask
-        # Normalize by number of active agents (sum of mask) instead of total agents
-        normalizer = jax.lax.stop_gradient(jnp.sum(mask) + eps)
-        collision_loss = jnp.sum(collision_loss) / normalizer 
+        collision_loss = collision_loss * mask 
+        collision_loss = jnp.sum(collision_loss) 
 
         ctrl_loss: jnp.ndarray = self.w3 * jnp.sum(jnp.square(ut))
         nav_loss: jnp.ndarray = self.w4 * jnp.sum(jnp.square(xt[:2]-ref_xt[:2]))
@@ -101,13 +96,12 @@ class SimulatorTrain:
         # Cost matrices
         self.Q = jnp.diag(jnp.array(kwargs.get("Q", [1.0, 1.0, 0.1, 0.1])))
         self.R = jnp.diag(jnp.array(kwargs.get("R", [0.1, 0.1])))
-        self.W = jnp.array(kwargs.get("W", [5.0, 1.0, 0.1, 1.0]))
+        self.W = jnp.array(kwargs.get("W", [100.0, 5.0, 0.1, 1.0]))
         
         self.sigma_1 = kwargs["sigma_1"]
         self.sigma_1s = jnp.linspace(0, self.sigma_1, self.epochs)
-        print("sigma_1 will increase from 0 to", self.sigma_1, "over", self.epochs, "epochs")
+        # print("sigma_1 will increase from 0 to", self.sigma_1, "over", self.epochs, "epochs")
         self.sigma_2 = kwargs["sigma_2"]
-        self.sigma_3 = kwargs["sigma_3"]
         self.optimization_iters = kwargs["optimization_iters"]
 
         # setup dataset
@@ -176,8 +170,7 @@ class SimulatorTrain:
             raise ValueError(f"Model type {model_type} not supported")
     
     def binary_loss(self, masks):
-        binary_penalty = masks * (1 - masks)
-        return jnp.mean(binary_penalty)
+        return jnp.mean(jnp.abs(0.5 - jnp.abs(0.5 - masks)))
     
     def mask_sparsity_loss(self, masks):
         return jnp.mean(masks)
@@ -186,11 +179,15 @@ class SimulatorTrain:
         pred_positions = pred_traj[:, :2]
         target_positions = target_traj[:, :2]
         position_diff = pred_positions - target_positions
-        distances = jnp.linalg.norm(position_diff, axis=-1)
-        return jnp.mean(distances)
-
+        squared_distances = jnp.sum(jnp.square(position_diff), axis=-1)
+        distances = jnp.sqrt(jnp.maximum(squared_distances, 1e-8))
+        mean_distance = jnp.mean(distances)
+        mean_distance = jnp.clip(mean_distance, 0.0, 1e3)
+        return mean_distance
+        
     def solve_masked_game_differentiable(self, sim_x0s, sim_ref_trajs, mask):
         # adjust masks such that they are n_agents long
+        # only use masks for the ego agent, every other agent should consider all other agents
         masks = (~jnp.eye(self.n_agents, dtype=bool)).astype(jnp.float32)
         non_ego_indices = jnp.arange(1, self.n_agents)
         masks = masks.at[self.ego_agent_id, non_ego_indices].set(mask)
@@ -218,7 +215,8 @@ class SimulatorTrain:
             sim_ref_trajs,
             mask
         )
-        return self.similarity_loss(state_trajectories[0], target_traj)
+        # debug plot state trajectories with sim_ref_trajs and target_traj
+        return self.similarity_loss(state_trajectories[self.ego_agent_id], target_traj)
 
     def batch_sim_loss(self, masks, x0s, ref_trajs, target_trajs):
         def per_sample(i):
@@ -265,6 +263,41 @@ class SimulatorTrain:
         )
         return state
 
+    def plot_eval_trajs(self, state_trajectories, sim_input, sim_x0, sim_ref_trajs, target_traj, out_file_name):
+        # convert arrays to numpy first
+        state_trajectories = np.asarray(jax.device_get(state_trajectories))
+        sim_input = np.asarray(jax.device_get(sim_input[0])) # have to unsqueeze the first dimension
+        sim_x0 = np.asarray(jax.device_get(sim_x0))
+        sim_ref_trajs = np.asarray(jax.device_get(sim_ref_trajs))
+        target_traj = np.asarray(jax.device_get(target_traj))
+        target_traj = target_traj[self.ego_agent_id][:, :2]
+
+        plt.figure(figsize=(10, 10))
+        plt.plot(state_trajectories[self.ego_agent_id, :, 0], state_trajectories[self.ego_agent_id, :, 1], linestyle="-.", label="Ego Actual Trajectory")
+        plt.plot(sim_ref_trajs[self.ego_agent_id, :, 0], sim_ref_trajs[self.ego_agent_id, :, 1], linestyle="--", label="Ego Sim Ref Trajectory")
+        plt.plot(target_traj[:, 0], target_traj[:, 1], linestyle=":", label="Ego Target Trajectory")
+        plt.scatter(sim_x0[self.ego_agent_id, 0], sim_x0[self.ego_agent_id, 1], label="Ego Sim X0")
+        plt.plot(sim_input[self.ego_agent_id, :, 0], sim_input[self.ego_agent_id, :, 1], linestyle="-", label="Ego Sim Input")
+        plt.legend()
+        plt.savefig(os.path.join(self.output_train_dir, "traj_plots", out_file_name))
+        plt.close()
+
+    def evaluate_model(self, state: train_state.TrainState, input, x0, ref_traj, target, epoch, iter):
+        # Detach all inputs from gradient tracking and ensure single-sample shapes
+        input = jax.lax.stop_gradient(input)
+        x0 = jax.lax.stop_gradient(x0)
+        ref_traj = jax.lax.stop_gradient(ref_traj)
+        target = jax.lax.stop_gradient(target)
+
+        predicted_mask = state.apply_fn({'params': state.params}, input)
+        predicted_mask = jax.lax.stop_gradient(predicted_mask)
+        # If model returns a leading batch dimension, squeeze/select a single sample
+        if predicted_mask.ndim > 1:
+            predicted_mask = predicted_mask[0]
+        print(f"predicted_mask: {predicted_mask}", flush=True)
+        state_trajectories = self.solve_masked_game_differentiable(x0, ref_traj, predicted_mask)
+        self.plot_eval_trajs(state_trajectories, input, x0, ref_traj, target, out_file_name=f"epoch_{epoch}_iter_{iter}.png")
+
     def train(
             self, 
             model: MLP, 
@@ -273,20 +306,22 @@ class SimulatorTrain:
         ): 
         
         output_train_dir = f"logs/train_{self.model_type}_{self.n_agents}_agents/{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.output_train_dir = output_train_dir
         os.makedirs(output_train_dir, exist_ok=True)
+        os.makedirs(os.path.join(output_train_dir, "traj_plots"), exist_ok=True)
+        os.makedirs(os.path.join(output_train_dir, "checkpoints"), exist_ok=True)
 
-        input_shape = (self.batch_size, self.mask_horizon * self.n_agents * self.state_dim)
+        input_shape = (self.batch_size, self.n_agents, self.mask_horizon, self.state_dim)
         state = self.create_train_state(model, optimizer, input_shape, rng)
 
         for epoch in range(self.epochs):
             print(f"Epoch {epoch + 1}/{self.epochs}")
+            self.sigma_1 = self.sigma_1s[epoch]
             dataloader = self.dataloader.create_jax_iterator()
             epoch_loss = 0.0
             num_batches = 0
             batch_loss = 0.0
 
-            self.sigma_1 = self.sigma_1s[epoch]
-            
             for inputs, x0s, ref_trajs, targets in dataloader:
                 state, loss, (binary_loss_val, mask_sparsity_loss_val, sim_loss_val) = self.train_step(state, inputs, x0s, ref_trajs, targets)
 
@@ -299,11 +334,11 @@ class SimulatorTrain:
                     print(f"Running Avg Loss Batch {num_batches} - Loss: {batch_loss/20:.6f}", flush=True)
                     print(f"Binary Loss: {binary_loss_val:.6f}, Mask Sparsity Loss: {mask_sparsity_loss_val:.6f}, Sim Loss: {sim_loss_val:.6f}", flush=True)
                     batch_loss = 0.0
-                
-                if num_batches % 100 == 0:
-                    example_mask = state.apply_fn({'params': state.params}, inputs)
-                    print(f"Example mask: {example_mask}", flush=True)
-            
+
+                    # evaluation (use a single sample and detach from gradients)
+                    sample_input, sample_x0s, sample_ref_trajs, sample_targets = inputs[0], x0s[0], ref_trajs[0], targets[0]
+                    sample_input = sample_input[None, ...]
+                    self.evaluate_model(state, sample_input, sample_x0s, sample_ref_trajs, sample_targets, epoch, num_batches)
 
             avg_loss = epoch_loss / num_batches
             print(f"Epoch {epoch + 1}/{self.epochs} - Average Loss: {avg_loss:.6f}")
@@ -355,7 +390,6 @@ if __name__ == "__main__":
         dataset_dir=config["dataset_dir"],
         sigma_1=config["sigma_1"],
         sigma_2=config["sigma_2"],
-        sigma_3=config["sigma_3"],
         optimization_iters=config["optimization_iters"],
         dt=config["dt"],
         state_dim=config["state_dim"],

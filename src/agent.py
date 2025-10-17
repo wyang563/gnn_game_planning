@@ -67,13 +67,13 @@ class Agent(iLQR):
         collision_loss = self.w1 * jnp.exp(-self.w2 * squared_distances)
         # Apply mask to collision loss, not distance
         # differentiably clamp values to close to 0 or 1 using formula: 0.5 * (1 + tanh(10 * (mask - 0.5)))
-        eps = 1e-8
+        # eps = 1e-8
         alpha = 16.0
         modified_mask = jax.nn.sigmoid(alpha * (mask - 0.5))
         collision_loss = collision_loss * modified_mask 
         # Normalize by number of active agents (sum of mask) instead of total agents
-        normalizer = jax.lax.stop_gradient(jnp.sum(modified_mask) + eps)
-        collision_loss = jnp.sum(collision_loss) / normalizer 
+        # normalizer = jax.lax.stop_gradient(jnp.sum(modified_mask) + eps)
+        collision_loss = jnp.sum(collision_loss) 
 
         ctrl_loss: jnp.ndarray = self.w3 * jnp.sum(jnp.square(ut))
         nav_loss: jnp.ndarray = self.w4 * jnp.sum(jnp.square(xt[:2]-ref_xt[:2]))

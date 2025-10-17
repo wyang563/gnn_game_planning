@@ -25,12 +25,12 @@ class MLP(nn.Module):
     mask_output_dim: int = n_agents - 1  # Mask for other agents (excluding ego agent)
     
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x: jnp.ndarray):
         """
         Forward pass of PSN.
         
         Args:
-            x: Input tensor of shape (batch_size, T_observation * N_agents * state_dim)
+            x: Input tensor of shape (batch_size, N_agents, T_observation, state_dim)
                Flattened observation trajectories
             
         Returns:
@@ -38,15 +38,17 @@ class MLP(nn.Module):
                 - mask: Binary mask of shape (batch_size, N_agents - 1)
                 - goals: Goal positions of shape (batch_size, N_agents * 2)
         """
+        # normalize inputs relative to last ego's position
+        positions = x[:, :, :, :2]
+        velocities = x[:, :, :, 2:]
+        # note this assumes ego agent ind is 0
+        batch_last_ego_position = positions[:, 0, -1, :]
+        positions = positions - batch_last_ego_position[:, None, None, :]
+
+        x = jnp.concatenate([positions, velocities], axis=-1)
         # Reshape input to (batch_size, T_observation, N_agents, state_dim)
         batch_size = x.shape[0]
-        x = x.reshape(batch_size, self.mask_horizon, self.n_agents, self.state_dim)
-        
-        # Average over time steps to get a summary representation
-        x = jnp.mean(x, axis=1)  # (batch_size, N_agents, state_dim)
-        
-        # Flatten all agent states
-        x = x.reshape(batch_size, self.n_agents * self.state_dim)
+        x = x.reshape(batch_size, self.n_agents * self.state_dim * self.mask_horizon)
         
         # Shared feature extraction layers
         x = nn.Dense(features=self.hidden_dims[0])(x)

@@ -57,6 +57,7 @@ if __name__ == "__main__":
             "x0s_file": f"src/data/mlp_n_agents_{N}_{mode}/x0s.zarr",
             "ref_trajs_file": f"src/data/mlp_n_agents_{N}_{mode}/ref_trajs.zarr",
             "targets_file": f"src/data/mlp_n_agents_{N}_{mode}/targets.zarr",
+            "save_plot_dir": f"src/data/mlp_n_agents_{N}_{mode}/plots",
         }
     elif model_type == "gnn":
         raise NotImplementedError("GNN data generation not implemented yet")

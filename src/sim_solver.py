@@ -12,7 +12,12 @@ import zarr
 import numpy as np
 import os
 from models.mlp import MLP
+from psn.psn_train import PlayerSelectionNetwork
 import equinox as eqx
+import matplotlib.pyplot as plt
+import random
+import pickle
+import flax
 
 # Configure JAX to use float32 by default for better performance
 jax.config.update("jax_default_dtype_bits", "32")
@@ -49,7 +54,16 @@ class Simulator:
         # setup MLP model
         if self.masking_model_path is not None:
             if self.masking_method == "MLP":
-                self.model = eqx.tree_deserialise_leaves(self.masking_model_path, MLP(self.n_agents, self.mask_horizon, 4, (256, 64, 16), key=jax.random.PRNGKey(42)))
+                rng = jax.random.PRNGKey(42)
+                dummy_input = jnp.ones((1, self.n_agents, self.mask_horizon, 4))
+                model = PlayerSelectionNetwork(mask_output_dim=self.n_agents - 1)
+                variables = model.init(rng, dummy_input)
+                with open(self.masking_model_path, "rb") as f:
+                    model_bytes = pickle.load(f)
+                loaded_variables = flax.serialization.from_bytes(variables, model_bytes)
+                # Keep the Module separate from its parameters for inference
+                self.model = model
+                self.model_state = loaded_variables['params']
 
         # Other initial state
         self.agent_trajectories = None
@@ -214,7 +228,7 @@ class Simulator:
         elif masking_method == "nearest_neighbors_radius":
             self.other_index = nearest_neighbors_radius(past_x_trajs, critical_radius=self.critical_radius)
         elif masking_method == "MLP":
-            self.other_index = run_MLP(self._batch_x_trajs(past_x_trajs), self.model, self.n_agents)
+            self.other_index = run_MLP(self._batch_x_trajs(past_x_trajs), self.model, self.model_state, self.n_agents)
         elif masking_method == "None":
             pass
         else:
@@ -316,6 +330,9 @@ class Simulator:
         self.horizon_u_trajs += self.step_size * v_trajs
 
     def run_test(self, gen_data_configs: Dict[str, Any] = None) -> None:
+        # generate 4 random iter timesteps to collect data for
+        data_iter_timesteps = random.sample(range(5, self.time_steps - 5), 4)
+
         for iter_timestep in tqdm(range(self.time_steps)):
             gen_data = gen_data_configs is not None
             x_trajs = self.calculate_x_trajs()
@@ -325,7 +342,7 @@ class Simulator:
             past_x_trajs = self.run_masking_method(self.masking_method, iter_timestep, x_trajs)
 
             # save model input data, we only save data every 20 time steps so we don't over populate our data with one particular trajectory from a scene
-            if gen_data and iter_timestep % 20 == 0:
+            if gen_data and iter_timestep in data_iter_timesteps:
                 if gen_data_configs['model_type'] == 'mlp':
                     self.save_mlp_dataset(past_x_trajs, gen_data_configs['inputs_file'])
                     self.save_mlp_dataset(self.horizon_x0s, gen_data_configs['x0s_file'])
@@ -374,12 +391,16 @@ class Simulator:
             self.u_trajs = self.u_trajs.at[:, iter_timestep, :].set(self.horizon_u_trajs[:, 0, :])
 
             # write out data for trajectories we took over horizon
-            if gen_data and iter_timestep % 20 == 0:
+            if gen_data and iter_timestep in data_iter_timesteps:
                 horizon_x_trajs, _, _ = self.jit_batched_linearize_dyn(self.horizon_x0s, self.horizon_u_trajs)
                 if gen_data_configs['model_type'] == 'mlp':
                     self.save_mlp_dataset(horizon_x_trajs, gen_data_configs['targets_file'])
                 elif gen_data_configs['model_type'] == 'gnn':
                     raise NotImplementedError("GNN data generation not implemented yet")
+
+                # plot trajectories and add to dataset
+                save_plot_dir = gen_data_configs['save_plot_dir']
+                plot_single_trajectory(past_x_trajs, horizon_x_trajs, self.horizon_ref_trajs, save_plot_dir)
         
         # calculate x_traj/u_traj for all agents based off batched values in simulator
         for i, agent in enumerate(self.agents):
@@ -389,6 +410,35 @@ class Simulator:
         # check convergence
         for agent in self.agents:
             print(f"Agent {agent.id}, converged={agent.check_convergence()}")
+
+def plot_single_trajectory(past_x_trajs, horizon_x_trajs, horizon_ref_trajs, save_plot_dir):
+    """
+    Plot a single trajectory and add to dataset
+    """
+    if not os.path.exists(save_plot_dir):
+        os.makedirs(save_plot_dir, exist_ok=True)
+    plot_number = len(os.listdir(save_plot_dir))
+    num_agents = past_x_trajs.shape[0]
+    cmap = plt.cm.get_cmap("tab10", num_agents)
+    plt.figure(figsize=(8, 8))
+    for agent_idx in range(num_agents):
+        color = cmap(agent_idx % 10)
+        past = past_x_trajs[agent_idx]
+        horizon = horizon_x_trajs[agent_idx]
+        ref = horizon_ref_trajs[agent_idx]
+        plt.plot(past[:, 0], past[:, 1], color=color, linewidth=2.0, linestyle="-.", label=(f"Agent {agent_idx} past" if agent_idx == 0 else None))
+        plt.plot(horizon[:, 0], horizon[:, 1], color=color, linewidth=2.0, linestyle="--", label=(f"Agent {agent_idx} horizon" if agent_idx == 0 else None))
+        plt.plot(ref[:, 0], ref[:, 1], color=color, linewidth=2.0, linestyle=":", label=(f"Agent {agent_idx} ref" if agent_idx == 0 else None))
+    
+    plt.gca().set_aspect("equal", adjustable="box")
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.title("Per-agent trajectories: past inputs, reference, target")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_plot_dir, f"plot_{plot_number}.png"))
+    plt.close()
 
 if __name__ == "__main__":
     # DEBUG MODE

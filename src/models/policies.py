@@ -72,9 +72,12 @@ def nearest_neighbors_radius(past_x_trajs: jnp.ndarray, critical_radius: float) 
     within_radius_mask = jnp.where(mask_diag, False, within_radius_mask)
     return within_radius_mask.astype(jnp.int32)
 
-def run_MLP(flat_x_trajs: jnp.ndarray, model: MLP, n_agents: int) -> jnp.ndarray:
+def run_MLP(flat_x_trajs: jnp.ndarray, model, model_state, n_agents: int) -> jnp.ndarray:
     # Get player masks from model and add in ~0 entries for ego-agent
-    player_masks = model(flat_x_trajs)
+    if hasattr(model, 'apply_fn'):
+        player_masks = model.apply_fn({'params': model_state}, flat_x_trajs)
+    else:
+        player_masks = model.apply({'params': model_state}, flat_x_trajs)
     final_player_masks = jnp.full((n_agents, n_agents), 1e-5, dtype=jnp.float32)
     rows = jnp.arange(n_agents)[:, None]
     cols = jnp.arange(n_agents - 1)[None, :]

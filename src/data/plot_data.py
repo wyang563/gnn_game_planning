@@ -1,165 +1,116 @@
+import os
+from pathlib import Path
+from typing import Tuple
+
+import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
-import jax.numpy as jnp
-import zarr
-import os
-import argparse
+
 from data.mlp_dataset import create_mlp_dataloader
 
-def load_single_data_instance(dataset_dir: str):
-    """
-    Load a single instance of data from the dataset.
-    
-    Args:
-        dataset_dir: Path to the dataset directory containing .zarr files
-        
-    Returns:
-        Tuple of (inputs, x0s, ref_trajs, targets) for a single timestep
-    """
-    # Create dataloader
-    dataloader = create_mlp_dataloader(
-        inputs_path=os.path.join(dataset_dir, "inputs.zarr"),
-        targets_path=os.path.join(dataset_dir, "targets.zarr"),
-        x0s_path=os.path.join(dataset_dir, "x0s.zarr"),
-        ref_trajs_path=os.path.join(dataset_dir, "ref_trajs.zarr"),
-        shuffle_buffer=500,
-    )
-    
-    # Get first instance
-    batch_iter = dataloader.create_jax_iterator()
-    inputs, x0s, ref_trajs, targets = next(batch_iter)
-    
-    # Convert to numpy for plotting
-    inputs = np.array(inputs)
-    x0s = np.array(x0s)
-    ref_trajs = np.array(ref_trajs)
-    targets = np.array(targets)
-    
-    return inputs, x0s, ref_trajs, targets
 
-def plot_agent_trajectories(inputs, x0s, ref_trajs, targets, n_agents):
+def _get_dataset_paths() -> Tuple[str, str, str, str]:
     """
-    Plot the past trajectories, current positions, reference trajectories, and target trajectories for all agents.
-    
-    Args:
-        inputs: Input features (batch, n_agents, n_agents, horizon, state_dim) - past trajectories in inputs[0, :, :, :2]
-        x0s: Initial states (batch, N, 4) - [x, y, vx, vy]
-        ref_trajs: Reference trajectories (batch, N, horizon, 2) - [x, y]
-        targets: Target trajectories (batch, N, horizon, 4) - [x, y, vx, vy]
-        n_agents: Number of agents
-        horizon: Planning horizon
+    Resolve absolute paths to the Zarr arrays located under the test dataset folder.
     """
-    # Remove batch dimension
-    inputs = inputs.squeeze(0)  # (n_agents, n_agents, horizon, state_dim)
-    x0s = x0s.squeeze(0)  # (n_agents, 4)
-    ref_trajs = ref_trajs.squeeze(0)  # (n_agents, horizon, 2)
-    targets = targets.squeeze(0)  # (n_agents, horizon, 4)
-    
-    fig, ax = plt.subplots(1, 1, figsize=(14, 10))
-    
-    # Extract past trajectories from inputs
-    # inputs[0, :, :, :2] gives past positions for each agent
-    past_trajs = inputs[0, :, :, :2]  # (n_agents, horizon, 2)
-    
-    # Extract current positions
-    x0_positions = x0s[:, :2]  # (n_agents, 2)
-    
-    # Extract target trajectories (first two indices in last dimension)
-    target_trajs = targets[:, :, :2]  # (n_agents, horizon, 2)
-    
-    # Plot for each agent
-    for i in range(n_agents):
-        color = f'C{i}'
-        
-        # 1) Plot past trajectories (dotted line)
-        past_x = past_trajs[i, :, 0]
-        past_y = past_trajs[i, :, 1]
-        ax.plot(past_x, past_y, ':', alpha=0.7, linewidth=2, color=color, 
-                label=f'Agent {i} Past' if i < 6 else "")
-        
-        # 2) Plot current positions (x0)
-        ax.scatter(x0_positions[i, 0], x0_positions[i, 1], c=color, s=100, 
-                  marker='o', edgecolors='black', linewidth=2, zorder=10,
-                  label=f'Agent {i} Current' if i < 6 else "")
-        
-        # 3) Plot reference trajectories (solid line)
-        ref_x = ref_trajs[i, :, 0]
-        ref_y = ref_trajs[i, :, 1]
-        ax.plot(ref_x, ref_y, '-', alpha=0.8, linewidth=2, color=color,
-                label=f'Agent {i} Reference' if i < 6 else "")
-        
-        # 4) Plot target trajectories (dashed line)
-        target_x = target_trajs[i, :, 0]
-        target_y = target_trajs[i, :, 1]
-        ax.plot(target_x, target_y, '--', alpha=0.8, linewidth=2, color=color,
-                label=f'Agent {i} Target' if i < 6 else "")
-    
-    ax.set_xlabel('X Position', fontsize=12)
-    ax.set_ylabel('Y Position', fontsize=12)
-    ax.set_title('Agent Trajectories: Past (dotted), Current (circles), Reference (solid), Target (dashed)', fontsize=14)
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
-    ax.grid(True, alpha=0.3)
-    ax.axis('equal')
-    
+    data_dir = Path(__file__).resolve().parent / "mlp_n_agents_10_test"
+    inputs_path = str(data_dir / "inputs.zarr")
+    targets_path = str(data_dir / "targets.zarr")
+    x0s_path = str(data_dir / "x0s.zarr")
+    ref_trajs_path = str(data_dir / "ref_trajs.zarr")
+    return inputs_path, targets_path, x0s_path, ref_trajs_path
+
+
+def _to_numpy(array: jnp.ndarray) -> np.ndarray:
+    # Ensure we have a NumPy array on CPU for plotting
+    return np.asarray(array)
+
+
+def plot_single_sample(inputs: np.ndarray, ref_trajs: np.ndarray, targets: np.ndarray, output_path: str | None = None) -> None:
+    """
+    Plot, for each agent, the observed input trajectory (past), the reference
+    trajectory to follow, and the target trajectory.
+
+    Shapes (after selecting batch dimension):
+      - inputs:   (N, T_past, 4)      -> use [:, :, 0:2] for (x, y)
+      - ref_trajs:(N, T_future, 2)    -> already (x, y)
+      - targets:  (N, T_future, 4)    -> use [:, :, 0:2] for (x, y)
+    """
+    num_agents = inputs.shape[0]
+
+    # Extract XY components
+    inputs_xy = inputs[:, :, 0:2]
+    ref_xy = ref_trajs[:, :, 0:2]
+    targets_xy = targets[:, :, 0:2]
+
+    cmap = plt.cm.get_cmap("tab10", num_agents)
+    plt.figure(figsize=(8, 8))
+
+    for agent_idx in range(num_agents):
+        color = cmap(agent_idx % 10)
+        past = inputs_xy[agent_idx]  # (T_past, 2)
+        ref = ref_xy[agent_idx]      # (T_future, 2)
+        targ = targets_xy[agent_idx] # (T_future, 2)
+
+        # Past inputs
+        plt.plot(past[:, 0], past[:, 1], color=color, linewidth=2.0, label=(f"Agent {agent_idx} past" if agent_idx == 0 else None))
+        plt.scatter(past[-1, 0], past[-1, 1], color=color, s=20)
+
+        # Reference (dashed)
+        plt.plot(ref[:, 0], ref[:, 1], color=color, linestyle="--", linewidth=1.5, label=("reference" if agent_idx == 0 else None))
+
+        # Target (dotted)
+        plt.plot(targ[:, 0], targ[:, 1], color=color, linestyle=":", linewidth=1.5, label=("target" if agent_idx == 0 else None))
+
+    plt.gca().set_aspect("equal", adjustable="box")
+    plt.xlabel("x")
+    plt.ylabel("y")
+    plt.title("Per-agent trajectories: past inputs, reference, target")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
     plt.tight_layout()
-    return fig
-
-def main(save_plots=True, output_dir="plots", dataset_dir="src/data/mlp_n_agents_10_test"):
-    """
-    Main function to load data and create all plots.
-    
-    Args:
-        save_plots: If True, save plots to files instead of displaying
-        output_dir: Directory to save plots (only used if save_plots=True)
-        dataset_dir: Path to the dataset directory containing .zarr files
-    """
-    
-    print("Loading data...")
-    try:
-        inputs, x0s, ref_trajs, targets = load_single_data_instance(dataset_dir)
-        print("Data loaded successfully!")
-    except Exception as e:
-        print(f"Error loading data: {e}")
-        return
-    
-    # Remove batch dimension to get correct shapes
-    targets_no_batch = targets.squeeze(0)
-    n_agents, horizon = targets_no_batch.shape[:2]
-    
-    # Create output directory if saving plots
-    if save_plots:
-        os.makedirs(output_dir, exist_ok=True)
-        print(f"Saving plots to {output_dir}/")
-    
-    # Create the single plot
-    print("Creating plot...")
-    
-    # Single plot: Past trajectories, current positions, reference trajectories, and target trajectories
-    fig = plot_agent_trajectories(inputs, x0s, ref_trajs, targets, n_agents)
-    
-    if save_plots:
-        fig.savefig(f"{output_dir}/agent_trajectories.png", dpi=300, bbox_inches='tight')
-        print("Saved: agent_trajectories.png")
-    
-    if not save_plots:
-        # Show the plot
-        plt.show()
+    if output_path is not None:
+        out_dir = Path(output_path).parent
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=200, bbox_inches="tight")
+        plt.close()
     else:
-        # Close figure to free memory
-        plt.close(fig)
-    
-    print("All plots created successfully!")
+        plt.show()
+
+
+def main() -> None:
+    inputs_path, targets_path, x0s_path, ref_trajs_path = _get_dataset_paths()
+
+    # Create a dataloader that yields one timestep (containing all agents) per batch
+    dataset = create_mlp_dataloader(
+        inputs_path=inputs_path,
+        targets_path=targets_path,
+        x0s_path=x0s_path,
+        ref_trajs_path=ref_trajs_path,
+        batch_size=1,
+        shuffle_buffer=1,   # keep ordering deterministic here
+        prefetch_size=1,
+    )
+
+    # Grab a single batch (shape: (1, N, ...))
+    iterator = dataset.create_jax_iterator()
+    try:
+        inputs_b, _x0s_b, ref_b, targets_b = next(iter(iterator))
+    except StopIteration:
+        raise RuntimeError("Dataset appears to be empty; no batches to plot.")
+
+    # Squeeze batch dimension
+    inputs_np = _to_numpy(inputs_b)[0]
+    ref_np = _to_numpy(ref_b)[0]
+    targets_np = _to_numpy(targets_b)[0]
+
+    # Save to project-level plots directory
+    project_root = Path(__file__).resolve().parents[2]
+    output_path = str(project_root / "plots" / "agent_trajectories.png")
+    plot_single_sample(inputs_np, ref_np, targets_np, output_path=output_path)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Plot data from the GNN game planning dataset')
-    parser.add_argument('--dataset_dir', type=str, default='src/data/mlp_n_agents_10_test',
-                        help='Path to the dataset directory containing .zarr files')
-    parser.add_argument('--save', action='store_true',
-                        help='Save plots to files instead of displaying')
-    parser.add_argument('--output_dir', type=str, default='plots',
-                        help='Directory to save plots (only used with --save)')
-    
-    args = parser.parse_args()
-    
-    # Call main function with command line arguments
-    main(save_plots=args.save, output_dir=args.output_dir, dataset_dir=args.dataset_dir)
+    main()
+
+
