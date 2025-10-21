@@ -3,11 +3,11 @@ import jax
 import jax.numpy as jnp
 from jax import jit, vmap, grad
 from typing import Tuple, Optional, List, Dict, Any
-from utils.utils import origin_init_collision, random_init, load_config, parse_arguments
-from utils.point_agent_lqr_plots import LQRPlotter
+from utils.goal_init import origin_init_collision, random_init, load_config, parse_arguments
+from examples.point_agent_lqr_plots import LQRPlotter
 from tqdm import tqdm
 from models.policies import *
-from agent import Agent
+from example_notebooks.agent import Agent
 import zarr
 import numpy as np
 import os

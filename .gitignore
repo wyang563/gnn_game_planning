@@ -11,6 +11,8 @@ example_files
 test_playground.py
 plots/
 reference_trajectories_*
+checkpoints
+results
 
 # cache files
 *.egg-info

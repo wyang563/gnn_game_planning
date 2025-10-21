@@ -1,5 +1,4 @@
 import jax.numpy as jnp
-from models.mlp import MLP
 
 def nearest_neighbors_top_k(past_x_trajs: jnp.ndarray, top_k: int) -> jnp.ndarray:
     n_agents = past_x_trajs.shape[0]
@@ -71,22 +70,6 @@ def nearest_neighbors_radius(past_x_trajs: jnp.ndarray, critical_radius: float) 
     mask_diag = jnp.eye(n_agents, dtype=bool)
     within_radius_mask = jnp.where(mask_diag, False, within_radius_mask)
     return within_radius_mask.astype(jnp.int32)
-
-def run_MLP(flat_x_trajs: jnp.ndarray, model, model_state, n_agents: int) -> jnp.ndarray:
-    # Get player masks from model and add in ~0 entries for ego-agent
-    if hasattr(model, 'apply_fn'):
-        player_masks = model.apply_fn({'params': model_state}, flat_x_trajs)
-    else:
-        player_masks = model.apply({'params': model_state}, flat_x_trajs)
-    final_player_masks = jnp.full((n_agents, n_agents), 1e-5, dtype=jnp.float32)
-    rows = jnp.arange(n_agents)[:, None]
-    cols = jnp.arange(n_agents - 1)[None, :]
-    j_full = jnp.where(cols < rows, cols, cols + 1)
-    idx_map = jnp.stack([jnp.broadcast_to(rows, (n_agents, n_agents - 1)), j_full], axis=-1)
-
-    final_player_masks = final_player_masks.at[idx_map[..., 0], idx_map[..., 1]].set(player_masks)
-
-    return final_player_masks
 
 if __name__ == "__main__":
     # Test case for jacobian function

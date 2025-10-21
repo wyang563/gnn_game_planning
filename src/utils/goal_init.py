@@ -212,22 +212,3 @@ def random_init(n_agents: int,
         goals.append(goal)
     
     return init_ps, goals
-
-def parse_arguments():
-    """
-    Parse command line arguments.
-    
-    Returns:
-        Parsed arguments containing config file path
-    """
-    parser = argparse.ArgumentParser(description='Run LQR-based multi-agent simulation')
-    parser.add_argument(
-        '--config', 
-        type=str, 
-        default=None,
-        help='Path to YAML configuration file (default: configs/point_agent_small.yaml)'
-    )
-    return parser.parse_args()
-
-def get_masking_function(masking_func_str: str):
-    pass
