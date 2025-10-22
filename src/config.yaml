@@ -6,7 +6,7 @@ game:
   T_observation: 10         # Number of steps to observe before solving the game
 
   # Agent configuration
-  N_agents: 10              # Total number of agents in the game
+  N_agents: 4             # Total number of agents in the game
   ego_agent_id: 0           # ID of the ego agent (usually 0)
   
   # State and control dimensions
@@ -90,6 +90,9 @@ psn:
   scheduler_factor: 0.5     # Factor for learning rate reduction
   scheduler_patience: 10    # Patience for learning rate scheduler
 
+  # observation length
+  observation_length: 10    # Length of observation history (K_observation)
+
 gnn:
 training:
   # Data source for training
@@ -98,8 +101,8 @@ training:
   data_dir: "reference_trajectories_${N_agents}p"  # Directory containing reference trajectory data
   
   # Data split configuration
-  train_samples: 384         # Number of samples to use for training (first N samples)
-  test_samples: 128          # Number of samples to use for testing (later N samples)
+  train_samples: 0.9         # Number of samples to use for training (first N samples)
+  test_samples: 0.1          # Number of samples to use for testing (later N samples)
   
   # General training settings
   seed: 42                  # Random seed for reproducibility
@@ -141,8 +144,8 @@ paths:
   testing_data_dir: "src/data/receding_horizon_trajectories_${N_agents}p"              # Default/legacy testing directory
   
   # Data split configuration (shared across all data loading)
-  train_samples: 384         # Number of samples to use for training (first N samples)
-  test_samples: 128          # Number of samples to use for testing (later N samples)
+  train_samples: 0.9         # Number of samples to use for training (first N samples)
+  test_samples: 0.1          # Number of samples to use for testing (later N samples)
 
   # Model directories
   models_dir: "src/models"

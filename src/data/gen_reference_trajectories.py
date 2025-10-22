@@ -37,6 +37,7 @@ def generate_reference_trajectories(**kwargs):
 
     num_existing_samples = len(os.listdir(output_dir)) // 2
     start_id = num_existing_samples
+    upper_bound_agents = n_agents
 
     print("Starting from sample ID: ", start_id)
 
@@ -46,7 +47,7 @@ def generate_reference_trajectories(**kwargs):
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
             create_loss_functions(agents, "test")
         elif gen_type == "variable":
-            n_agents = random.randint(2, n_agents)
+            n_agents = random.randint(2, upper_bound_agents)
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
             create_loss_functions(agents, "test")
         else:

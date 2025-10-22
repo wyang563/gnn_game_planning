@@ -19,9 +19,44 @@ class PointAgent(iLQR):
             u[1]   # dvy/dt = ay
         ])
 
-    def create_loss_functions_train(self):
-        # TODO: Implement loss functions for training
-        pass
+    def create_loss_function_train(self):
+        def runtime_loss(xt, ut, ref_xt, other_states, mask):
+            nav_loss = jnp.sum(jnp.square(xt[:2] - ref_xt[:2]))
+
+            squared_distances = jnp.sum(jnp.square(xt[:2] - other_states[:, :2]), axis=1)
+            collision_loss = self.collision_weight * jnp.exp(-self.collision_scale * squared_distances)
+            # apply mask to collision loss
+            collision_loss = collision_loss * mask
+            collision_loss = jnp.sum(collision_loss)
+
+            ctrl_loss = self.ctrl_weight * jnp.sum(jnp.square(ut))
+            return nav_loss + collision_loss + ctrl_loss
+        
+        def trajectory_loss(x_traj, u_traj, ref_x_traj, other_x_trajs, mask):
+            def single_step_loss(args):
+                xt, ut, ref_xt, other_xts, mask = args
+                return runtime_loss(xt, ut, ref_xt, other_xts, mask)
+            loss_array = vmap(single_step_loss)((x_traj, u_traj, ref_x_traj, other_x_trajs, mask))
+            return loss_array.sum() * self.dt
+
+        def linearize_loss(x_traj, u_traj, ref_x_traj, other_x_trajs, mask):
+            dldx = grad(runtime_loss, argnums=(0))
+            dldu = grad(runtime_loss, argnums=(1))
+            
+            def grad_step(args):
+                xt, ut, ref_xt, other_xts, mask = args
+                return dldx(xt, ut, ref_xt, other_xts, mask), dldu(xt, ut, ref_xt, other_xts, mask)
+            
+            grads = vmap(grad_step)((x_traj, u_traj, ref_x_traj, other_x_trajs, mask))
+            return grads[0], grads[1]  # a_traj, b_traj 
+        
+        self.runtime_loss = runtime_loss
+        self.trajectory_loss = trajectory_loss
+        self.linearize_loss = linearize_loss
+        self.compiled_trajectory_loss = jit(trajectory_loss, device=self.device)
+        self.compiled_linearize_loss = jit(linearize_loss, device=self.device)
+        self.compiled_linearize_dyn = jit(self.linearize_dyn, device=self.device)
+        self.compiled_solve = jit(self.solve, device=self.device)
 
     def create_loss_functions_test(self):
         def runtime_loss(xt, ut, ref_xt, other_states):
