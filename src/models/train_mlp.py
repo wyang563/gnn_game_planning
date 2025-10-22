@@ -63,7 +63,7 @@ sys.path.insert(0, parent_dir)
 from lqrax import iLQR  # Now needed for PointAgent
 from load_config import load_config
 from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training, extract_true_goals_from_batch
-
+from models.loss_funcs import binary_loss, mask_sparsity_loss, batch_similarity_loss
 
 # ============================================================================
 # GLOBAL PARAMETERS
@@ -204,28 +204,6 @@ class PlayerSelectionNetwork(nn.Module):
         mask = nn.sigmoid(mask)  # Binary mask
         return mask
 
-def create_masked_game_setup(sample_data: Dict[str, Any], ego_agent_id: int,
-                             ego_mask: jnp.ndarray, goals: jnp.ndarray) -> Tuple[List, List, jnp.ndarray, jnp.ndarray]:
-    """
-    Create masked game setup based on predicted mask and goals.
-    
-    During training: ALL agents are included, but only agent 0 (ego agent) uses mask values
-    for mutual costs. Other agents always consider full mutual costs with all agents.
-    
-    Args:
-        sample_data: Reference trajectory sample
-        ego_agent_id: ID of the ego agent
-        predicted_mask: Predicted mask from PSN (N_agents - 1)
-        predicted_goals: Predicted goals from pretrained network (N_agents * 2)
-        
-    Returns:
-        agents: List of selected agents
-        initial_states: List of initial states for selected agents
-        target_positions: Target positions for selected agents
-        mask_values: Mask values for the game
-    """
-    pass
-
 # ============================================================================
 # ENHANCED TRAINING FUNCTIONS
 # ============================================================================
@@ -245,8 +223,40 @@ def create_train_state(model: nn.Module, optimizer: optax.GradientTransformation
     
     return state
 
-def train_step():
-    pass
+def train_step(state: train_state.TrainState, batch: Tuple[jnp.ndarray, jnp.ndarray],
+               batch_data: List[Dict[str, Any]], sigma1: float, sigma2: float, rng: jnp.ndarray = None, 
+               obs_input_type: str = "full") -> Tuple[train_state.TrainState, jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
+    """
+    Single training step with game-solving loss function.
+    
+    Uses differentiable iLQR-based game solver for proper gradient flow.
+    """
+    observations, reference_trajectories = batch
+
+    def loss_fn(params):
+        predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
+        predicted_goals = extract_true_goals_from_batch(batch_data)
+        binary_loss_val = binary_loss(predicted_masks)
+        sparsity_loss_val = mask_sparsity_loss(predicted_masks)
+        similarity_loss_val = batch_similarity_loss(predicted_masks, predicted_goals, batch_data, obs_input_type=obs_input_type)
+        total_loss = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
+        return total_loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val)
+    
+    (loss, loss_components), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+
+    # Apply gradient clipping to prevent gradient explosion
+    grad_norm = jax.tree.reduce(lambda x, y: x + jnp.sum(jnp.square(y)), grads, initializer=0.0)
+    grad_norm = jnp.sqrt(grad_norm)
+    
+    max_grad_norm = config.debug.gradient_clip_value
+    if grad_norm > max_grad_norm:
+        scale = max_grad_norm / grad_norm
+        grads = jax.tree.map(lambda g: g * scale, grads)
+    
+    # Apply gradients using the optimizer
+    state = state.apply_gradients(grads=grads)
+    
+    return state, loss, loss_components
 
 def train_psn(
         model: nn.Module,
