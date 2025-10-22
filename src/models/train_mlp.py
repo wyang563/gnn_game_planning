@@ -258,6 +258,70 @@ def train_step(state: train_state.TrainState, batch: Tuple[jnp.ndarray, jnp.ndar
     
     return state, loss, loss_components
 
+def validation_step(state: train_state.TrainState, validation_data: List[Dict[str, Any]],
+                   batch_size: int = 32, ego_agent_id: int = 0, obs_input_type: str = "full") -> Tuple[float, float, float, float, List[jnp.ndarray]]:
+    """
+    Perform validation on the validation dataset.
+    
+    Args:
+        state: Current train state
+        validation_data: Validation dataset
+        goal_model: Pretrained goal inference network
+        goal_trained_state: Trained state of goal inference network
+        batch_size: Batch size for validation
+        ego_agent_id: ID of the ego agent
+        
+    Returns:
+        Tuple of (average validation loss, average binary loss, average sparsity loss, average similarity loss, list of predicted masks)
+    """
+    val_losses = []
+    val_binary_losses = []
+    val_sparsity_losses = []
+    val_similarity_losses = []
+    all_predicted_masks = []
+    
+    # Create validation batches
+    num_val_batches = (len(validation_data) + batch_size - 1) // batch_size
+    
+    for batch_idx in range(num_val_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, len(validation_data))
+        batch_data = validation_data[start_idx:end_idx]
+        
+        # Prepare batch for validation
+        observations, reference_trajectories = prepare_batch_for_training(batch_data, obs_input_type)
+        
+        # Get predicted mask from PSN (validation mode, no dropout)
+        predicted_masks = state.apply_fn({'params': state.params}, observations, deterministic=True)
+        
+        # Store masks for analysis
+        all_predicted_masks.append(predicted_masks)
+        
+        # Extract true goals from reference data
+        predicted_goals = extract_true_goals_from_batch(batch_data)
+        
+        # Compute validation loss components
+        binary_loss_val = binary_loss(predicted_masks)
+        sparsity_loss_val = mask_sparsity_loss(predicted_masks)
+        
+        # Compute similarity loss using game solving
+        similarity_loss_val = batch_similarity_loss(predicted_masks, predicted_goals, batch_data)
+        
+        # Total validation loss (same as training loss for fair comparison)
+        total_loss_val = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
+
+        val_losses.append(float(total_loss_val))
+        val_binary_losses.append(float(binary_loss_val))
+        val_sparsity_losses.append(float(sparsity_loss_val))
+        val_similarity_losses.append(float(similarity_loss_val))
+    
+    avg_val_loss = sum(val_losses) / len(val_losses)
+    avg_val_binary = sum(val_binary_losses) / len(val_binary_losses)
+    avg_val_sparsity = sum(val_sparsity_losses) / len(val_sparsity_losses)
+    avg_val_similarity = sum(val_similarity_losses) / len(val_similarity_losses)
+
+    return avg_val_loss, avg_val_binary, avg_val_sparsity, avg_val_similarity, all_predicted_masks
+
 def train_psn(
         model: nn.Module,
         training_data: List[Dict[str, Any]],
@@ -307,10 +371,10 @@ def train_psn(
     # Track individual loss components over epochs
     binary_losses = []
     sparsity_losses = []
-    ego_agent_costs = []
+    similarity_losses = []
     validation_binary_losses = []
     validation_sparsity_losses = []
-    validation_ego_agent_costs = []
+    validation_similarity_losses = []
     best_loss = float('inf')
     best_state = None
     best_epoch = 0
@@ -336,6 +400,10 @@ def train_psn(
 
         # Create batches
         num_batches = (len(training_data) + batch_size - 1) // batch_size
+
+        batch_pbar = tqdm(range(num_batches), 
+                         desc=f"Epoch {epoch+1}/{num_epochs} - Batches", 
+                   position=1, leave=False)
         
         for batch_idx in tqdm(range(num_batches)):
             start_idx = batch_idx * batch_size
@@ -356,6 +424,124 @@ def train_psn(
                 step_key,
                 obs_input_type
             )
+
+            epoch_losses.append(float(loss))
+            epoch_binary_losses.append(float(binary_loss_val))
+            epoch_sparsity_losses.append(float(sparsity_loss_val))
+            epoch_similarity_losses.append(float(similarity_loss_val))
+
+            # Update batch progress bar
+            batch_pbar.set_postfix({
+                'Loss': f'{float(loss):.4f}',
+                'Binary': f'{float(binary_loss_val):.4f}',
+                'Sparsity': f'{float(sparsity_loss_val):.4f}',
+                'Similarity': f'{float(similarity_loss_val):.4f}'
+            })
+            batch_pbar.update(1)
+
+            # Update main training progress bar
+            training_pbar.set_postfix({
+                'Epoch': f'{epoch+1}/{num_epochs}',
+                'Batch': f'{batch_idx+1}/{num_batches}',
+                'Loss': f'{float(loss):.4f}',
+            })
+            training_pbar.update(1)
+
+        # Close batch progress bar
+        batch_pbar.close()
+
+        # validation step
+        val_loss, val_binary_loss, val_sparsity_loss, val_similarity_loss, val_masks = validation_step(
+            state, validation_data, batch_size, ego_agent_id=ego_agent_id, obs_input_type=obs_input_type)
+        validation_losses.append(val_loss)
+        validation_binary_losses.append(val_binary_loss)
+        validation_sparsity_losses.append(val_sparsity_loss)
+        validation_similarity_losses.append(val_similarity_loss)
+
+        # Calculate average loss for the epoch
+        avg_loss = sum(epoch_losses) / len(epoch_losses)
+        avg_binary_loss = sum(epoch_binary_losses) / len(epoch_binary_losses)
+        avg_sparsity_loss = sum(epoch_sparsity_losses) / len(epoch_sparsity_losses)
+        avg_similarity_loss = sum(epoch_similarity_losses) / len(epoch_similarity_losses)
+        training_losses.append(avg_loss)
+        binary_losses.append(avg_binary_loss)
+        sparsity_losses.append(avg_sparsity_loss)
+        similarity_losses.append(avg_similarity_loss)
+
+        # Track best model based on validation loss
+        if val_loss < best_loss:
+            best_loss = val_loss
+            best_epoch = epoch
+            
+            # Save best model using proper JAX/Flax serialization
+            best_model_path = os.path.join(log_dir, "psn_best_model.pkl")
+            model_bytes = flax.serialization.to_bytes(state)
+            with open(best_model_path, 'wb') as f:
+                pickle.dump(model_bytes, f)
+            print(f"\nNew best model found at epoch {epoch + 1} with validation loss: {best_loss:.4f}")
+            print(f"Best model saved to: {best_model_path}")
+        
+        # Save model every 20 epochs
+        if (epoch + 1) % 20 == 0:
+            checkpoint_path = os.path.join(run_log_dir, f"psn_checkpoint_epoch_{epoch + 1}.pkl")
+            model_bytes = flax.serialization.to_bytes(state)
+            with open(checkpoint_path, 'wb') as f:
+                pickle.dump(model_bytes, f)
+            print(f"Checkpoint saved at epoch {epoch + 1}: {checkpoint_path}")
+        
+        # Update main progress bar
+        training_pbar.set_postfix({
+            'Epoch': f'{epoch+1}/{num_epochs}',
+            'Train Loss': f'{avg_loss:.4f}',
+            'Val Loss': f'{val_loss:.4f}',
+        })
+        
+        # Log epoch-level metrics to TensorBoard
+        writer.add_scalar('Loss/Epoch/Training', avg_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Validation', val_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Best', best_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Binary', avg_binary_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Sparsity', avg_sparsity_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Similarity', avg_similarity_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Validation_Binary', val_binary_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Validation_Sparsity', val_sparsity_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Validation_Similarity', val_similarity_loss, epoch)
+        writer.add_scalar('Training/EpochProgress', (epoch + 1) / num_epochs, epoch)
+        
+        # Training progress metrics
+        writer.add_scalar('Progress/EpochProgress', (epoch + 1) / num_epochs, epoch)
+        writer.add_scalar('Progress/LossImprovement', float(best_loss - val_loss), epoch)
+
+        # Add text summary for hyperparameters
+        if epoch == 0:
+            writer.add_text('Hyperparameters', f"""
+            - Number of agents: {N_agents}
+            - Total game steps: {T_total}
+            - Observation steps: {T_observation}
+            - Learning rate: {learning_rate}
+            - Batch size: {batch_size}
+            - Sigma1: {sigma1}
+            - Sigma2: {sigma2}
+            - Total epochs: {num_epochs}
+            """, epoch)
+        
+        if epoch % 10 == 0:
+            print(f"Epoch {epoch}/{num_epochs}, Train Loss: {avg_loss:.4f}, Val Loss: {val_loss:.4f}, Best Val: {best_loss:.4f} (epoch {best_epoch+1})")
+        
+        # Clean up memory after each epoch
+        gc.collect()
+        if hasattr(jax, 'clear_caches'):
+            jax.clear_caches()
+    
+    # Close progress bar
+    training_pbar.close()
+    
+    # Close TensorBoard writer
+    writer.close()
+    
+    print(f"\nTraining completed! Best model found at epoch {best_epoch + 1} with loss: {best_loss:.4f}")
+    
+    return training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, state, log_dir, best_loss, best_epoch
 
 if __name__ == "__main__":
     print("=" * 80)
