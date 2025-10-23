@@ -6,7 +6,7 @@ game:
   T_observation: 10         # Number of steps to observe before solving the game
 
   # Agent configuration
-  N_agents: 4             # Total number of agents in the game
+  N_agents: 10             # Total number of agents in the game
   ego_agent_id: 0           # ID of the ego agent (usually 0)
   
   # State and control dimensions
@@ -127,6 +127,78 @@ training:
   model_save_format: "pkl"  # Format for saving models ["pkl", "flax"]
 
 testing:
+  # PSN testing data  
+  psn_data_source: "receding_horizon_trajectories"
+  psn_data_dir: "receding_horizon_trajectories_${N_agents}p"  # PSN tests on receding horizon trajectories
+  
+  # Data split configuration (shared across all testing)
+  train_samples: 384         # Number of samples to use for training (first N samples)
+  test_samples: 128          # Number of samples to use for testing (later N samples)
+  
+  # Legacy/general testing parameters (for backward compatibility)
+  data_source: "receding_horizon_trajectories"  # Default for PSN testing
+  data_dir: "receding_horizon_trajectories_${N_agents}p"  # Default directory
+  
+  # Test data parameters
+  num_test_samples: 10      # Number of test samples to evaluate
+  test_data_dir: "receding_horizon_trajectories_${N_agents}p"  # Directory with test data (DEPRECATED: use specific data_dir instead)
+
+  # Default model paths (fallback for when templates can't be resolved)
+  psn_model: null  # Will be set programmatically based on actual training parameters
+  goal_inference_model: null  # Will be set programmatically based on actual training parameters
+  
+  # Receding horizon testing parameters
+  receding_horizon:
+    # Two-phase approach configuration
+    initial_stabilization_iterations: 0  # No stabilization period - use PSN and goal inference from step 10
+    
+    # Player selection configuration for PSN testing (NOT used for baseline methods)
+    # Selection method: "threshold" or "rank" - only applies when use_baseline=False
+    # - "threshold": Select agents with mask values > mask_threshold (default behavior)
+    # - "rank": Select top N agents based on mask values (rank = N means select N-1 other agents)
+    # Note: Baseline methods use their own internal selection logic and ignore these parameters
+    selection_method: "threshold"        # ["threshold", "rank"] - only for PSN methods
+    mask_threshold: 0.5                  # Threshold for agent selection when using "threshold" method
+    rank: 3                              # Number of total agents when using "rank" method (rank=3 means 3-player game, i.e., select 2 other agents)
+    
+    # Testing configuration
+    num_samples: 10                     # Number of samples to test (use later 128 samples)
+    use_later_samples: false             # Whether to use later samples (samples 384-511) instead of first samples
+    output_dir: "receding_horizon_test_results"  # Test results will be placed under the PSN model directory
+    
+    # Baseline testing configuration
+    use_baseline: false                  # Whether to use baseline methods instead of PSN model
+    baseline_mode: "all"    # Baseline method ["All", "Distance Threshold", "Nearest Neighbor", "Jacobian", "Hessian", "Cost Evolution", "Barrier Function", "Control Barrier Function"]
+    baseline_parameter: 3                # Parameter for baseline method (e.g., number of players (including ego), distance threshold)
+    
+    # Evaluation metrics configuration - automatically set based on test_type
+    # prediction_test: compute_prediction_metrics=true, compute_planning_metrics=true
+    # planning_test: compute_prediction_metrics=false, compute_planning_metrics=true
+    compute_prediction_metrics: true     # Whether to compute prediction metrics (ADE, FDE) - auto-set based on test_type
+    compute_planning_metrics: true       # Whether to compute planning metrics (nav_cost, safety_cost, control_cost) - always true
+    
+    # Visualization settings
+    create_gif: false                     # Whether to create trajectory GIFs
+    gif_duration: 0.5                    # Duration per frame in seconds
+    gif_loop: 0                          # Number of loops (0 = infinite)
+    
+    # Performance monitoring
+    track_computation_time: true         # Whether to track game solving time
+    save_detailed_results: true          # Whether to save detailed iteration results
+  
+  # Evaluation metrics
+  compute_trajectory_error: true    # Whether to compute trajectory tracking error
+  compute_collision_rate: true      # Whether to compute collision statistics
+  compute_goal_accuracy: true       # Whether to compute goal prediction accuracy
+  
+  # Visualization
+  create_animations: true           # Whether to create trajectory animations
+  save_comprehensive_plots: true   # Whether to save detailed analysis plots
+  animation_fps: 10                 # FPS for animations
+  
+  # Output directories
+  results_dir: "test_results"       # Directory for test results
+  plots_dir: "test_plots"           # Directory for test plots 
 
 # ============================================================================
 # PATHS AND DIRECTORIES

@@ -60,7 +60,6 @@ import os
 # Add parent directory to path for imports
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
-from lqrax import iLQR  # Now needed for PointAgent
 from load_config import load_config
 from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training, extract_true_goals_from_batch
 from models.loss_funcs import binary_loss, mask_sparsity_loss, batch_similarity_loss
@@ -203,6 +202,41 @@ class PlayerSelectionNetwork(nn.Module):
         mask = nn.Dense(features=self.mask_output_dim, name='mask_output')(x)
         mask = nn.sigmoid(mask)  # Binary mask
         return mask
+
+# ============================================================================
+# MODEL LOADING UTILITIES
+# ============================================================================
+
+def load_trained_models(psn_model_path: Optional[str], obs_input_type: str = "full") -> Tuple[Optional[PlayerSelectionNetwork], Any]:
+    """
+    Load trained PSN model from files.
+    
+    Args:
+        psn_model_path: Path to the trained PSN model file (can be None)
+        obs_input_type: Observation input type ["full", "partial"]
+        
+    Returns:
+        Tuple of (psn_model, psn_trained_state)
+    """
+    # Load PSN model only if path is provided
+    if psn_model_path is not None:
+        print(f"Loading trained PSN model from: {psn_model_path}")
+        
+        # Load the PSN model bytes
+        with open(psn_model_path, 'rb') as f:
+            psn_model_bytes = pickle.load(f)
+        
+        # Create the PSN model
+        psn_model = PlayerSelectionNetwork(hidden_dims=psn_hidden_dims, obs_input_type=obs_input_type)
+        
+        # Deserialize the PSN state
+        psn_trained_state = flax.serialization.from_bytes(psn_model, psn_model_bytes)
+        print("✓ PSN model loaded successfully")
+    else:
+        print("No PSN model provided (using baseline method)")
+        psn_model, psn_trained_state = None, None
+
+    return psn_model, psn_trained_state
 
 # ============================================================================
 # ENHANCED TRAINING FUNCTIONS

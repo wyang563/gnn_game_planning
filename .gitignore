@@ -10,6 +10,7 @@ example_files
 *out.txt*
 test_playground.py
 plots/
+receding_horizon_trajectories_*
 reference_trajectories_*
 checkpoints
 results

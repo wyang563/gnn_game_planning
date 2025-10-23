@@ -32,11 +32,10 @@ from lqrax import iLQR
 from load_config import load_config, get_device_config, setup_jax_config
 
 # Import model classes
-from models.train_mlp import (
-    PlayerSelectionNetwork, load_trained_models, load_pretrained_goal_model
-)
+from models.train_mlp import PlayerSelectionNetwork, load_trained_models 
+
 # Import baselines
-from player_selection_network.baselines import baseline_selection
+from models.baselines import baseline_selection
 
 # ============================================================================
 # LOAD CONFIGURATION AND SETUP
@@ -815,8 +814,6 @@ def extract_reference_goals(sample_data: Dict[str, Any], num_agents: int = None)
 def test_receding_horizon_with_models(sample_data: Dict[str, Any],
                                       psn_model: PlayerSelectionNetwork = None,
                                       psn_trained_state: Any = None,
-                                      goal_model: GoalInferenceNetwork = None,
-                                      goal_trained_state: Any = None,
                                       psn_model_path: str = None,
                                       use_baseline: bool = False,
                                       baseline_mode: str = None) -> Dict[str, Any]:
@@ -829,8 +826,6 @@ def test_receding_horizon_with_models(sample_data: Dict[str, Any],
         sample_data: Reference trajectory sample data (will be normalized)
         psn_model: Trained PSN model (optional if use_baseline=True)
         psn_trained_state: Trained PSN model state (optional if use_baseline=True)
-        goal_model: Trained goal inference model (optional if use_baseline=True)
-        goal_trained_state: Trained goal inference model state (optional if use_baseline=True)
         psn_model_path: Path to PSN model (for logging)
         use_baseline: Whether to use baseline methods instead of PSN model
         baseline_mode: Baseline method to use (if use_baseline=True)
@@ -866,7 +861,6 @@ def test_receding_horizon_with_models(sample_data: Dict[str, Any],
     results = {
         'sample_id': sample_data['sample_id'],
         'ego_agent_id': ego_agent_id,
-        'goal_source': config.testing.receding_horizon.goal_source,
         'use_baseline': use_baseline,
         'baseline_mode': baseline_mode if use_baseline else None,
         'T_observation': T_observation,
@@ -961,42 +955,43 @@ def test_receding_horizon_with_models(sample_data: Dict[str, Any],
             # After N iterations: Use goal inference and player selection models (threshold: {config.testing.receding_horizon.mask_threshold})
             
             # Use goal source configuration to decide between true goals and goal inference
-            goal_source = config.testing.receding_horizon.goal_source
-            test_type = config.testing.receding_horizon.test_type
+            # goal_source = config.testing.receding_horizon.goal_source
+            # test_type = config.testing.receding_horizon.test_type
+            predicted_goals = extract_reference_goals(filtered_sample_data, n_agents_effective)
             
-            if test_type == "planning_test":
-                # Planning test: ego agent's goal is always known (ground truth), other agents' goals depend on goal_source
-                true_goals_all = extract_reference_goals(filtered_sample_data, n_agents_effective)
+            # if test_type == "planning_test":
+            #     # Planning test: ego agent's goal is always known (ground truth), other agents' goals depend on goal_source
+            #     true_goals_all = extract_reference_goals(filtered_sample_data, n_agents_effective)
                 
-                if goal_source == "goal_inference":
-                    # Infer other agents' goals using goal inference model
-                    goal_obs_traj = extract_observation_trajectory(filtered_sample_data, config.goal_inference.obs_input_type, n_agents_effective)
-                    goal_obs_input = goal_obs_traj.flatten().reshape(1, -1)
+            #     if goal_source == "goal_inference":
+            #         # Infer other agents' goals using goal inference model
+            #         goal_obs_traj = extract_observation_trajectory(filtered_sample_data, config.goal_inference.obs_input_type, n_agents_effective)
+            #         goal_obs_input = goal_obs_traj.flatten().reshape(1, -1)
                     
-                    inferred_goals = goal_model.apply({'params': goal_trained_state.params}, goal_obs_input, deterministic=True)
-                    inferred_goals = inferred_goals[0].reshape(n_agents_effective, 2)
+            #         inferred_goals = goal_model.apply({'params': goal_trained_state.params}, goal_obs_input, deterministic=True)
+            #         inferred_goals = inferred_goals[0].reshape(n_agents_effective, 2)
                     
-                    # Combine: ego agent uses ground truth, others use inferred
-                    predicted_goals = true_goals_all.at[1:].set(inferred_goals[1:])  # Other agents use inferred goals
-                else:  # goal_source == "true_goals"
-                    # Planning test with true_goals: all agents use ground truth goals
-                    predicted_goals = true_goals_all
-            else:  # prediction_test
-                # Prediction test: all agents' goals are inferred or true based on goal_source
-                if goal_source == "true_goals":
-                    # Use true goals for all agents
-                    predicted_goals = extract_reference_goals(filtered_sample_data, n_agents_effective)
-                elif goal_source == "goal_inference":
-                    # Always use first T_observation steps from the original ground truth trajectory
-                    goal_obs_traj = extract_observation_trajectory(filtered_sample_data, config.goal_inference.obs_input_type, n_agents_effective)
+            #         # Combine: ego agent uses ground truth, others use inferred
+            #         predicted_goals = true_goals_all.at[1:].set(inferred_goals[1:])  # Other agents use inferred goals
+            #     else:  # goal_source == "true_goals"
+            #         # Planning test with true_goals: all agents use ground truth goals
+            #         predicted_goals = true_goals_all
+            # else:  # prediction_test
+            #     # Prediction test: all agents' goals are inferred or true based on goal_source
+            #     if goal_source == "true_goals":
+            #         # Use true goals for all agents
+            #         predicted_goals = extract_reference_goals(filtered_sample_data, n_agents_effective)
+            #     elif goal_source == "goal_inference":
+            #         # Always use first T_observation steps from the original ground truth trajectory
+            #         goal_obs_traj = extract_observation_trajectory(filtered_sample_data, config.goal_inference.obs_input_type, n_agents_effective)
                     
-                    # Convert to input format for goal inference model
-                    goal_obs_input = goal_obs_traj.flatten().reshape(1, -1)
+            #         # Convert to input format for goal inference model
+            #         goal_obs_input = goal_obs_traj.flatten().reshape(1, -1)
                     
-                    predicted_goals = goal_model.apply({'params': goal_trained_state.params}, goal_obs_input, deterministic=True)
-                    predicted_goals = predicted_goals[0].reshape(n_agents_effective, 2)
-                else:
-                    raise ValueError(f"Invalid goal_source: {goal_source}. Must be 'true_goals' or 'goal_inference'")
+            #         predicted_goals = goal_model.apply({'params': goal_trained_state.params}, goal_obs_input, deterministic=True)
+            #         predicted_goals = predicted_goals[0].reshape(n_agents_effective, 2)
+            #     else:
+            #         raise ValueError(f"Invalid goal_source: {goal_source}. Must be 'true_goals' or 'goal_inference'")
             
             # Get true goals for comparison
             true_goals = extract_reference_goals(filtered_sample_data, n_agents_effective)
@@ -1331,14 +1326,11 @@ def save_test_results(results: Dict[str, Any], save_dir: str) -> str:
 
 
 def run_receding_horizon_testing(psn_model_path: str = None, 
-                                goal_model_path: str = None,
                                 reference_file: str = None,
                                 output_dir: str = None,
                                 num_samples: int = None,
                                 use_baseline: bool = None,
-                                baseline_mode: str = None,
-                                test_type: str = None,
-                                goal_source: str = None) -> List[Dict[str, Any]]:
+                                baseline_mode: str = None) -> List[Dict[str, Any]]:
     """
     Run receding horizon testing with goal inference and player selection models.
     
@@ -1359,33 +1351,6 @@ def run_receding_horizon_testing(psn_model_path: str = None,
     
     # Set global N_agents for model compatibility if needed for nearest neighbor selection
     original_n_agents = None
-    if config.game.N_agents > 10:
-        # Import and set the global variable before any model loading
-        import psn_training_with_pretrained_goals as psn_module
-        original_n_agents = psn_module.N_agents
-        psn_module.N_agents = 10
-        print(f"Set global N_agents from {original_n_agents} to 10 for 10-agent model compatibility")
-        
-        # Recalculate hidden dimensions and mask output dim after setting N_agents
-        if psn_module.N_agents == 10:
-            psn_module.psn_hidden_dims = psn_module.config.psn.hidden_dims_10p
-            psn_module.goal_inference_hidden_dims = psn_module.config.goal_inference.hidden_dims_10p
-            # Update mask_output_dim for 10 agents (9 other agents)
-            psn_module.mask_output_dim = 9
-            print(f"Updated hidden dimensions to 10-agent values: {psn_module.psn_hidden_dims}")
-            print(f"Updated mask_output_dim to: {psn_module.mask_output_dim}")
-            
-            # Patch the PlayerSelectionNetwork class to use the correct mask_output_dim
-            psn_module.PlayerSelectionNetwork.mask_output_dim = 9  # Force 10-agent mask output
-            print("Patched PlayerSelectionNetwork.mask_output_dim to 9 for 10-agent compatibility")
-        
-        # Also update goal inference module if it exists
-        try:
-            import goal_inference.pretrain_goal_inference_rh as goal_module
-            goal_module.N_agents = 10
-            print(f"Also updated goal inference module N_agents to 10")
-        except ImportError:
-            pass  # Goal inference module not needed for this test
     
     print("=" * 80)
     print("RECEDING HORIZON TESTING WITH GOAL INFERENCE AND PLAYER SELECTION MODELS")
@@ -1400,90 +1365,9 @@ def run_receding_horizon_testing(psn_model_path: str = None,
         use_baseline = config.testing.receding_horizon.use_baseline
     if baseline_mode is None:
         baseline_mode = config.testing.receding_horizon.baseline_mode
-    if test_type is None:
-        test_type = config.testing.receding_horizon.test_type
-    if goal_source is None:
-        goal_source = config.testing.receding_horizon.goal_source
-    
-    # Automatically set metrics based on test type
-    if test_type == "prediction_test":
-        # Prediction test: compute both prediction and planning metrics
-        compute_prediction_metrics = True
-        compute_planning_metrics = True
-    elif test_type == "planning_test":
-        # Planning test: only compute planning metrics (ego goal is known)
-        compute_prediction_metrics = False
-        compute_planning_metrics = True
-    else:
-        raise ValueError(f"Invalid test_type: {test_type}. Must be 'prediction_test' or 'planning_test'")
-    
-    # Update config with computed metrics
-    config.testing.receding_horizon.compute_prediction_metrics = compute_prediction_metrics
-    config.testing.receding_horizon.compute_planning_metrics = compute_planning_metrics
-    
-    # Determine output directory based on test type, goal source and input method if not provided
-    if output_dir is None:
-        if use_baseline:
-            # For baseline methods, create hierarchical directory structure
-            method_name = baseline_mode.lower().replace(' ', '_').replace('_', '')
-            baseline_param = config.testing.receding_horizon.baseline_parameter
-            goal_suffix = "goal_inference" if goal_source == "goal_inference" else "goal_true"
-            n_agents = config.game.N_agents
-            output_dir = f"baseline_results/{test_type}/N_{n_agents}/receding_horizon_results_{n_agents}_{method_name}_param_{baseline_param}_{goal_suffix}"
-        else:
-            n_agents = config.game.N_agents
-            if goal_source == "true_goals":
-                # Extract method name from PSN model path if available
-                if psn_model_path:
-                    psn_model_name = os.path.basename(psn_model_path).replace('.pkl', '')
-                    output_dir = f"receding_horizon_results_{n_agents}_{test_type}_goal_true_{psn_model_name}"
-                else:
-                    output_dir = f"receding_horizon_results_{n_agents}_{test_type}_goal_true"
-            elif goal_source == "goal_inference":
-                # Always use first_steps for goal inference
-                if psn_model_path:
-                    psn_model_name = os.path.basename(psn_model_path).replace('.pkl', '')
-                    output_dir = f"receding_horizon_results_{n_agents}_{test_type}_goal_inference_{psn_model_name}"
-                else:
-                    output_dir = f"receding_horizon_results_{n_agents}_{test_type}_goal_inference"
-            else:
-                output_dir = f"receding_horizon_results_{n_agents}_{test_type}"
     
     # Load models based on goal source and baseline configuration
-    psn_model, psn_trained_state, goal_model, goal_trained_state = None, None, None, None
-    
-    # Determine goal source
-    goal_source = config.testing.receding_horizon.goal_source
-    
-    if goal_source == "goal_inference":
-        # Load goal inference model regardless of baseline/PSN choice
-        print(f"Loading goal inference model...")
-        if goal_model_path is None:
-            raise ValueError("Goal model path must be provided when goal_source='goal_inference'")
-        
-        # Custom goal inference model loading for 10-agent compatibility
-        if config.game.N_agents > 10:
-            print(f"Custom loading goal inference model for 10-agent compatibility...")
-            import pickle
-            import flax.serialization
-            
-            # Load the goal inference model bytes
-            with open(goal_model_path, 'rb') as f:
-                goal_model_bytes = pickle.load(f)
-            
-            # Create the goal inference model with correct architecture for 10 agents
-            goal_model = GoalInferenceNetwork(
-                hidden_dims=psn_module.goal_inference_hidden_dims,
-                obs_input_type=config.goal_inference.obs_input_type,
-                goal_output_dim=20  # Force 10-agent goal output (10 agents × 2 coordinates = 20)
-            )
-            
-            # Deserialize the goal inference state
-            goal_trained_state = flax.serialization.from_bytes(goal_model, goal_model_bytes)
-            print(f"✓ Goal inference model loaded successfully with custom 10-agent architecture")
-        else:
-            goal_model, goal_trained_state = load_pretrained_goal_model(goal_model_path, config.goal_inference.obs_input_type)
-            print(f"✓ Goal inference model loaded successfully")
+    psn_model, psn_trained_state  = None, None
     
     if not use_baseline:
         # Load PSN model only when not using baseline
@@ -1491,29 +1375,8 @@ def run_receding_horizon_testing(psn_model_path: str = None,
         if psn_model_path is None:
             raise ValueError("PSN model path must be provided when use_baseline=False")
         
-        # Custom model loading for 10-agent compatibility
-        if config.game.N_agents > 10:
-            print(f"Custom loading PSN model for 10-agent compatibility...")
-            import pickle
-            import flax.serialization
-            
-            # Load the PSN model bytes
-            with open(psn_model_path, 'rb') as f:
-                psn_model_bytes = pickle.load(f)
-            
-            # Create the PSN model with correct architecture for 10 agents
-            psn_model = PlayerSelectionNetwork(
-                hidden_dims=psn_module.psn_hidden_dims, 
-                obs_input_type=config.psn.obs_input_type,
-                mask_output_dim=9  # Force 10-agent mask output
-            )
-            
-            # Deserialize the PSN state
-            psn_trained_state = flax.serialization.from_bytes(psn_model, psn_model_bytes)
-            print(f"✓ PSN model loaded successfully with custom 10-agent architecture")
-        else:
-            psn_model, psn_trained_state, _, _ = load_trained_models(psn_model_path, None, config.psn.obs_input_type)
-            print(f"✓ PSN model loaded successfully")
+        psn_model, psn_trained_state = load_trained_models(psn_model_path, config.psn.obs_input_type)
+        print(f"✓ PSN model loaded successfully")
     else:
         print(f"Using baseline method: {baseline_mode}")
         print(f"✓ Baseline mode configured")
@@ -1541,7 +1404,8 @@ def run_receding_horizon_testing(psn_model_path: str = None,
     # Select samples based on configuration
     if config.testing.receding_horizon.use_later_samples:
         # Use specific test samples (samples 512-575)
-        test_start_id = 512
+        # TODO: change this to set the start id based on the config's train/test split ratio
+        test_start_id = 750 
         test_end_id = test_start_id + num_samples  # 512 + 64 = 576
         test_samples = reference_data[test_start_id:test_end_id]
         print(f"Using test samples {test_start_id}-{test_end_id-1} ({len(test_samples)} samples)")
@@ -1556,7 +1420,7 @@ def run_receding_horizon_testing(psn_model_path: str = None,
         print(f"\nTesting sample {i+1}/{len(test_samples)}...")
         
         results = test_receding_horizon_with_models(
-                sample_data, psn_model, psn_trained_state, goal_model, goal_trained_state, 
+                sample_data, psn_model, psn_trained_state, 
                 psn_model_path, use_baseline, baseline_mode)
             
         # Save results
@@ -1632,45 +1496,11 @@ if __name__ == "__main__":
     # Load configuration
     use_baseline = config.testing.receding_horizon.use_baseline
     baseline_mode = config.testing.receding_horizon.baseline_mode
-    test_type = config.testing.receding_horizon.test_type
-    goal_source = config.testing.receding_horizon.goal_source
-    
-    # Validate configuration
-    if not validate_test_configuration(test_type, goal_source):
-        print_test_options()
-        exit(1)
-    
-    # Print current test configuration
-    print(f"Current Test Configuration:")
-    print(f"  Test Type: {test_type}")
-    print(f"  Goal Source: {goal_source}")
-    print()
+    # test_type = config.testing.receding_horizon.test_type
+    # goal_source = config.testing.receding_horizon.goal_source
     
     # Initialize model paths
     psn_model_path = None
-    goal_model_path = None
-    
-    # Determine effective number of agents for model selection
-    # If N_agents > 10, we'll use nearest neighbor selection and need 10-agent models
-    effective_n_agents = 10 if config.game.N_agents > 10 else config.game.N_agents
-    
-    if config.game.N_agents > 10:
-        print(f"Model Selection Strategy:")
-        print(f"  Original scenario: {config.game.N_agents} agents")
-        print(f"  Using nearest neighbor selection to reduce to 10 agents")
-        print(f"  Loading 10-agent models (goal inference + PSN)")
-        print()
-        
-    
-    # Set goal model path if goal source is goal_inference (regardless of baseline mode)
-    if goal_source == "goal_inference":
-        goal_model_path = f"log/goal_inference_rh_gru_{config.goal_inference.obs_input_type}_N_{effective_n_agents}_T_{config.game.T_total}_obs_{config.goal_inference.observation_length}_lr_{config.goal_inference.learning_rate}_bs_{config.goal_inference.batch_size}_goal_loss_weight_{config.goal_inference.goal_loss_weight}_epochs_{config.goal_inference.num_epochs}/goal_inference_rh_best_model.pkl"
-        
-        # Check if goal model exists
-        if not os.path.exists(goal_model_path):
-            print(f"Error: Goal inference model not found at: {goal_model_path}")
-            print("Please train a goal inference model first using: python3 goal_inference/pretrain_goal_inference.py")
-            exit(1)
     
     if not use_baseline:
         # Model paths - PSN from goal_true directory
@@ -1678,12 +1508,22 @@ if __name__ == "__main__":
         # Include observation input type (full/partial) in the model path
         # Use different model names for prediction vs planning tests
         obs_input_type = config.psn.obs_input_type
-        if test_type == "planning_test":
-            model_name = f"psn_gru_{obs_input_type}_planning_true_goals"
-        else:  # prediction_test
-            model_name = f"psn_gru_{obs_input_type}_true_goals"
+        psn_model_dir = f"log/psn_gru_{obs_input_type}_planning_true_goals_N_{config.game.N_agents}_T_{config.game.T_total}_obs_{config.game.T_observation}_lr_{config.psn.learning_rate}_bs_{config.psn.batch_size}_sigma1_{config.psn.sigma1}_sigma2_{config.psn.sigma2}_epochs_{config.psn.num_epochs}"
         
-        psn_model_path = f"log/goal_true_N_{effective_n_agents}_T_{config.game.T_total}_obs_{config.goal_inference.observation_length}/{model_name}_N_{effective_n_agents}_T_{config.game.T_total}_obs_{config.goal_inference.observation_length}_lr_{config.psn.learning_rate}_bs_{config.psn.batch_size}_sigma1_{config.psn.sigma1}_sigma2_{config.psn.sigma2}_epochs_{config.psn.num_epochs}/psn_best_model.pkl"
+        # Check if the model directory exists
+        if not os.path.exists(psn_model_dir):
+            print(f"Error: PSN model directory not found: {psn_model_dir}")
+            print("Please train a PSN model first using: python3 player_selection_network/psn_training_with_pretrained_goals.py")
+            exit(1)
+        
+        # Find the latest run directory within the model directory
+        run_dirs = [d for d in os.listdir(psn_model_dir) if os.path.isdir(os.path.join(psn_model_dir, d))]
+        if not run_dirs:
+            print(f"Error: No run directories found in: {psn_model_dir}")
+            exit(1)
+        
+        latest_run_dir = max([os.path.join(psn_model_dir, d) for d in run_dirs], key=os.path.getctime)
+        psn_model_path = os.path.join(latest_run_dir, "psn_best_model.pkl")
         
         # Check if PSN model exists
         if not os.path.exists(psn_model_path):
@@ -1692,7 +1532,7 @@ if __name__ == "__main__":
             exit(1)
     
     # Use PSN-specific testing data directory (receding horizon trajectories)
-    reference_file = config.testing.psn_data_dir
+    reference_file = os.path.join("src/data", config.testing.psn_data_dir)
     
     # Create output directory based on configuration with method name
     if use_baseline:
@@ -1703,8 +1543,7 @@ if __name__ == "__main__":
         # Use original N_agents for directory naming (to distinguish different scenarios)
         n_agents = config.game.N_agents
         baseline_param = config.testing.receding_horizon.baseline_parameter
-        goal_suffix = "goal_inference" if goal_source == "goal_inference" else "goal_true"
-        output_dir = f"baseline_results/{test_type}/N_{n_agents}/receding_horizon_results_{n_agents}_{method_name}_param_{baseline_param}_{goal_suffix}"
+        output_dir = f"baseline_results/N_{n_agents}/receding_horizon_results_{n_agents}_{method_name}_param_{baseline_param}"
     else:
         # For PSN model, create directory under the PSN model directory with method name
         psn_model_dir = os.path.dirname(psn_model_path)
@@ -1724,28 +1563,17 @@ if __name__ == "__main__":
         
         # Get the total number of agents for directory naming
         n_agents = config.game.N_agents
-        
-        if goal_source == "true_goals":
-            output_dir = os.path.join(psn_model_dir, f"receding_horizon_results_{n_agents}_{test_type}_goal_true_{obs_type}_{method_suffix}_{psn_model_name}")
-        elif goal_source == "goal_inference":
-            # Always use first_steps for goal inference
-            output_dir = os.path.join(psn_model_dir, f"receding_horizon_results_{n_agents}_{test_type}_goal_inference_{obs_type}_{method_suffix}_{psn_model_name}")
-        else:
-            # Fallback to original directory name with method name
-            output_dir = os.path.join(psn_model_dir, f"receding_horizon_results_{n_agents}_{test_type}_{obs_type}_{method_suffix}_{psn_model_name}")
+        output_dir = os.path.join(psn_model_dir, f"receding_horizon_results_{n_agents}_{obs_type}_{method_suffix}_{psn_model_name}")
     
     os.makedirs(output_dir, exist_ok=True)
     
     print(f"Configuration:")
-    print(f"  Test Type: {test_type}")
-    print(f"  Goal Source: {goal_source}")
     print(f"  Use Baseline: {use_baseline}")
     if use_baseline:
         print(f"  Baseline Mode: {baseline_mode}")
         print(f"  Baseline Parameter: {config.testing.receding_horizon.baseline_parameter}")
     else:
         print(f"  PSN Model: {psn_model_path}")
-        print(f"  Goal Model: {goal_model_path}")
         print(f"  Selection Method: {config.testing.receding_horizon.selection_method}")
         if config.testing.receding_horizon.selection_method == "threshold":
             print(f"  Mask Threshold: {config.testing.receding_horizon.mask_threshold}")
@@ -1760,14 +1588,11 @@ if __name__ == "__main__":
     # Run testing
     results = run_receding_horizon_testing(
         psn_model_path=psn_model_path,
-        goal_model_path=goal_model_path,
         reference_file=reference_file,
         output_dir=output_dir,
         num_samples=config.testing.receding_horizon.num_samples,
         use_baseline=use_baseline,
         baseline_mode=baseline_mode,
-        test_type=test_type,
-        goal_source=goal_source
     )
     
     # Restore original N_agents if it was modified for nearest neighbor selection
