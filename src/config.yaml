@@ -94,6 +94,27 @@ psn:
   observation_length: 10    # Length of observation history (K_observation)
 
 gnn:
+  # Training parameters
+  learning_rate: 0.002      # Learning rate for Adam optimizer
+  batch_size: 64            # Batch size for training
+  num_epochs: 100            # Number of training epochs
+  dropout_rate: 0.3
+
+  # Loss function weights
+  sigma1: 0.075               # Weight for mask sparsity loss
+  sigma2: 0.075               # Weight for mask binary loss
+
+  # graph edge creation parameters
+  edge_metric: "fully_connected"
+
+  # message passing rounds
+  num_message_passing_rounds: 5
+
+  # dimensions
+  gru_hidden_size: 64
+  message_mlp_dims: [128, 64]
+  influence_head_dims: [128, 64]
+
 training:
   # Data source for training
   # IMPORTANT: Training should ALWAYS use reference trajectories
