@@ -172,9 +172,24 @@ def extract_true_goals_from_batch(batch_data: List[Dict[str, Any]]) -> jnp.ndarr
     
     for sample_data in batch_data:
         # Extract goals for all agents from the reference trajectory
-        goals = jnp.array(sample_data["target_positions"])
+        sample_goals = []
+        for agent_idx in range(N_agents):
+            agent_key = f"agent_{agent_idx}"
+            agent_states = sample_data["trajectories"][agent_key]["states"]
+            
+            # Use the final state position as the goal
+            if len(agent_states) > 0:
+                final_state = agent_states[-1]
+                goal_pos = jnp.array([final_state[0], final_state[1]])  # [x, y] from [x, y, vx, vy]
+            else:
+                # Fallback to zero if no states available
+                goal_pos = jnp.array([0.0, 0.0])
+            
+            sample_goals.append(goal_pos)
+        
         # Flatten all agent goals into a single array
-        batch_goals.append(goals)
+        sample_goals_flat = jnp.concatenate(sample_goals)  # (N_agents * 2,)
+        batch_goals.append(sample_goals_flat)
     
     # Stack all samples into a batch
     batch_goals_array = jnp.stack(batch_goals)  # (batch_size, N_agents * 2)

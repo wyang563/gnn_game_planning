@@ -12,7 +12,7 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     
 from load_config import load_config, setup_jax_config, get_device_config
-from solver.solve import create_agent_setup, create_loss_functions, solve_ilqgames_parallel, save_trajectory_sample, plot_sample_trajectories
+from solver.solve import create_agent_setup, create_loss_functions, solve_ilqgames_parallel_no_mask, save_trajectory_sample, plot_sample_trajectories
 import random
 
 def generate_reference_trajectories(**kwargs):
@@ -45,16 +45,16 @@ def generate_reference_trajectories(**kwargs):
         # create agent setup
         if gen_type == "fixed":
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
-            create_loss_functions(agents, "test")
+            create_loss_functions(agents, "no_mask")
         elif gen_type == "variable":
             n_agents = random.randint(2, upper_bound_agents)
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
-            create_loss_functions(agents, "test")
+            create_loss_functions(agents, "no_mask")
         else:
             raise ValueError(f"Invalid generation type: {gen_type}")
 
         # solve iLQGames
-        state_trajs, control_trajs, _ = solve_ilqgames_parallel(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)
+        state_trajs, control_trajs, _ = solve_ilqgames_parallel_no_mask(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)
 
         # save trajectory sample
         sample_data = save_trajectory_sample(

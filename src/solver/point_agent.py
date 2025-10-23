@@ -19,7 +19,7 @@ class PointAgent(iLQR):
             u[1]   # dvy/dt = ay
         ])
 
-    def create_loss_function_train(self):
+    def create_loss_function_mask(self):
         def runtime_loss(xt, ut, ref_xt, other_states, mask):
             nav_loss = jnp.sum(jnp.square(xt[:2] - ref_xt[:2]))
 
@@ -58,7 +58,7 @@ class PointAgent(iLQR):
         self.compiled_linearize_dyn = jit(self.linearize_dyn, device=self.device)
         self.compiled_solve = jit(self.solve, device=self.device)
 
-    def create_loss_functions_test(self):
+    def create_loss_functions_no_mask(self):
         def runtime_loss(xt, ut, ref_xt, other_states):
             nav_loss = jnp.sum(jnp.square(xt[:2] - ref_xt[:2]))
 

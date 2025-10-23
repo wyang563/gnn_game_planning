@@ -474,7 +474,7 @@ def train_psn(
             best_epoch = epoch
             
             # Save best model using proper JAX/Flax serialization
-            best_model_path = os.path.join(log_dir, "psn_best_model.pkl")
+            best_model_path = os.path.join(run_log_dir, "psn_best_model.pkl")
             model_bytes = flax.serialization.to_bytes(state)
             with open(best_model_path, 'wb') as f:
                 pickle.dump(model_bytes, f)

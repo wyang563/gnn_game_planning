@@ -22,13 +22,13 @@ from utils.goal_init import origin_init_collision, random_init
 
 def create_loss_functions(agents, mode):
     for agent in agents:
-        if mode == "train":
-            agent.create_loss_functions_train()
-        elif mode == "test":
-            agent.create_loss_functions_test()
+        if mode == "mask":
+            agent.create_loss_functions_mask()
+        elif mode == "no_mask":
+            agent.create_loss_functions_no_mask()
 
 # created batched loss functions (this is only for data generation when other x_trajs is the same size dims for all agents)
-def create_batched_loss_functions(agents, device):
+def create_batched_loss_functions_no_mask(agents, device):
     dummy_agent: PointAgent = agents[0]
     # Define batched functions that work on arrays of agent data
     def batched_linearize_dyn(x0s, u_trajs):
@@ -116,12 +116,12 @@ def solve_ilqgames_sequential(agents, initial_states, ref_trajs, num_iters, u_di
     total_time = end - start
     return state_trajs, control_trajs, total_time
 
-def solve_ilqgames_parallel(agents, initial_states, ref_trajs, num_iters, u_dim, tsteps, step_size, device):
+def solve_ilqgames_parallel_no_mask(agents, initial_states, ref_trajs, num_iters, u_dim, tsteps, step_size, device):
     start = time.time()
     n_agents = len(agents)
 
     # initialize batched functions
-    jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss = create_batched_loss_functions(agents, device)
+    jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss = create_batched_loss_functions_no_mask(agents, device)
     # initialize batched arrays
     control_trajs = jnp.zeros((n_agents, tsteps, u_dim))
     init_states = jnp.array([initial_states[i] for i in range(n_agents)])
@@ -277,7 +277,7 @@ if __name__ == "__main__":
 
     # create agent setup
     agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
-    create_loss_functions(agents, "test")
+    create_loss_functions(agents, "no_mask")
     # state_trajs, control_trajs, total_time = solve_ilqgames_sequential(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size)
     state_trajs, control_trajs, total_time = solve_ilqgames_parallel(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)
     print(f"Total solve time: {total_time}")
