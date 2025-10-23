@@ -1,0 +1,2 @@
+#!/bin/bash
+nohup bash -lc 'cd /home/alex/gnn_game_planning && python src/data/gen_reference_trajectories.py' > /home/alex/gnn_game_planning/log/generate_reference_trajs_$(date +%F_%H-%M-%S).log 2>&1 < /dev/null & disown

@@ -1596,11 +1596,11 @@ if __name__ == "__main__":
     )
     
     # Restore original N_agents if it was modified for nearest neighbor selection
-    if config.game.N_agents > 10:
-        import psn_training_with_pretrained_goals as psn_module
-        # Restore to original value (20 in this case)
-        psn_module.N_agents = 20
-        print(f"Restored global N_agents to 20")
+    # if config.game.N_agents > 10:
+    #     import psn_training_with_pretrained_goals as psn_module
+    #     # Restore to original value (20 in this case)
+    #     psn_module.N_agents = 20
+    #     print(f"Restored global N_agents to 20")
     
     # Create summary file explaining the model relationships
     summary_path = os.path.join(output_dir, "test_summary.txt")
@@ -1608,14 +1608,11 @@ if __name__ == "__main__":
         f.write("Receding Horizon Testing with Integrated Models\n")
         f.write("=" * 60 + "\n\n")
         f.write("Test Configuration:\n")
-        f.write(f"  - Test Type: {test_type}\n")
-        f.write(f"  - Goal Source: {goal_source}\n")
         f.write(f"  - Use Baseline: {use_baseline}\n")
         if use_baseline:
             f.write(f"  - Baseline Mode: {baseline_mode}\n")
             f.write(f"  - Baseline Parameter: {config.testing.receding_horizon.baseline_parameter}\n")
         else:
-            f.write(f"  - Goal Inference Model: {goal_model_path}\n")
             f.write(f"  - PSN Model: {psn_model_path}\n")
         f.write(f"  - Reference Data: {reference_file}\n")
         f.write(f"  - Number of samples: {config.testing.receding_horizon.num_samples}\n")
@@ -1635,17 +1632,12 @@ if __name__ == "__main__":
         
         f.write("\nDirectory Structure:\n")
         if not use_baseline:
-            if goal_model_path is not None:
-                f.write(f"  Goal Inference: {os.path.dirname(goal_model_path)}\n")
-            else:
-                f.write(f"  Goal Inference: None (using true goals)\n")
             f.write(f"  PSN Training: {os.path.dirname(psn_model_path)}\n")
             f.write(f"  Receding Horizon Test: {output_dir}\n")
         else:
-            f.write(f"  Baseline Results → {test_type} → N_{n_agents} → {os.path.basename(output_dir)}\n")
+            f.write(f"  Baseline Results → planning → N_{n_agents} → {os.path.basename(output_dir)}\n")
             f.write(f"  Method: {baseline_mode}\n")
             f.write(f"  Parameter: {baseline_param}\n")
-            f.write(f"  Goal Source: {goal_source}\n")
     
     print(f"\nReceding horizon testing completed!")
     print(f"Generated {len(results)} test results with integrated models.")

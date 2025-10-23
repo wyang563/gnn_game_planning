@@ -61,9 +61,9 @@ psn:
   dropout_rate: 0.3         # Dropout rate (increased for GRU version)
   
   # Training parameters
-  learning_rate: 0.001      # Learning rate for Adam optimizer
+  learning_rate: 0.002      # Learning rate for Adam optimizer
   batch_size: 64            # Batch size for training
-  num_epochs: 100            # Number of training epochs
+  num_epochs: 50            # Number of training epochs
   
   # Loss function weights
   sigma1: 0.075               # Weight for mask sparsity loss
@@ -163,7 +163,7 @@ testing:
     
     # Testing configuration
     num_samples: 10                     # Number of samples to test (use later 128 samples)
-    use_later_samples: false             # Whether to use later samples (samples 384-511) instead of first samples
+    use_later_samples: true             # Whether to use later samples (samples 384-511) instead of first samples
     output_dir: "receding_horizon_test_results"  # Test results will be placed under the PSN model directory
     
     # Baseline testing configuration

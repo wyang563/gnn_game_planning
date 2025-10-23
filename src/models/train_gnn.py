@@ -124,6 +124,7 @@ else:
 # ===================================================
 # GNN NETWORK DEFINITIONS
 # ===================================================
+
 class GNNSelectionNetwork(nn.Module):
     """
     GNN Selection Network for selecting important agents.
@@ -131,13 +132,10 @@ class GNNSelectionNetwork(nn.Module):
     hidden_dims: List[int]
     gru_hidden_size: int = 64
     dropout_rate: float = 0.3
-    mask_output_dim: int = N_agents - 1
-    obs_input_type: str = "full"     # "full" or "partial"
-    coarse_topk: int = 8             # pruning: keep K per destination
-    gate_hidden: int = 32
-    msg_hidden: int = 64
-    upd_hidden: int = 64
+    obs_input_type: str = "full"    # "full" or "partial"
+    gat_proj_dim: int = 64
     infl_hidden: int = 64
+    mask_output_dim: int = N_agents - 1
     deterministic: bool = True
 
     @nn.compact
@@ -175,8 +173,22 @@ class GNNSelectionNetwork(nn.Module):
         # stack agent features 
         h_nodes = jnp.stack(agent_features, axis=1) # (B, N, gru_hidden_dim)
 
-        # construct graph
-        graph_ij = jnp.zeros((batch_size, N_agents, N_agents, 2 * self.gru_hidden_size))
+
+if __name__ == "__main__":
+    # Initialize the model
+    model = GNNSelectionNetwork(hidden_dims=[64, 32], gru_hidden_size=64, dropout_rate=0.3, mask_output_dim=N_agents - 1, obs_input_type="full", gat_proj_dim=64, infl_hidden=64, deterministic=True)
+    
+    # Create dummy input
+    dummy_input = jnp.zeros((1, T_observation, N_agents, 4))
+    
+    # Initialize the model parameters
+    rng = jax.random.PRNGKey(42)
+    params = model.init(rng, dummy_input)
+    
+    # Now call the model with the initialized parameters
+    output = model.apply(params, dummy_input)
+    print(output.shape)
+
 
 
         
