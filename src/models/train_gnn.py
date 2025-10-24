@@ -33,11 +33,12 @@ import flax.serialization
 # Import from the main lqrax module
 import sys
 import os
+import random
 # Add parent directory to path for imports
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 from load_config import load_config
-from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training, extract_true_goals_from_batch
+from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training, extract_true_goals_from_batch, sort_by_n_agents, organize_batches
 from models.loss_funcs import binary_loss, mask_sparsity_loss, batch_similarity_loss
 
 # ============================================================================
@@ -230,13 +231,16 @@ class GNNSelectionNetwork(nn.Module):
 
         # Use the ego agent's encoding to generate the mask
         ego_encoding = node_encodings[:, ego_agent_id, :]  # (B, hidden_dim)
-        ego_incoming_edge_indices = graph_adj_matrix[:, ego_agent_id, :] == 1
-        ego_incoming_edge_encodings = node_encodings[:, ego_incoming_edge_indices, :]
-        # tile ego encoding to match shape of ego incoming encodings
-        ego_encoding = ego_encoding.repeat(ego_incoming_edge_encodings.shape[1], axis=1)
-        influence_head_inputs = jnp.concatenate([ego_incoming_edge_encodings, ego_encoding], axis=-1)
-        mask = influence_head(influence_head_inputs, deterministic=self.deterministic)  # (B, N_agents - 1)
-        return mask
+        transposed_graph_adj_matrix = jnp.transpose(graph_adj_matrix, (0, 2, 1))
+        batch_ego_incoming_edge_indices = transposed_graph_adj_matrix[:, ego_agent_id, :] == 1.0
+        ego_encoding_repeated = jnp.tile(ego_encoding[:, None, :], (1, node_encodings.shape[1], 1))
+        influence_head_inputs = jnp.concatenate([node_encodings, ego_encoding_repeated], axis=-1)
+        influence_outputs = influence_head(influence_head_inputs, deterministic=self.deterministic)
+        influence_outputs = jnp.squeeze(influence_outputs, axis=-1)
+
+        # zero out influence outputs for non-incoming edges
+        output_masks = jnp.where(batch_ego_incoming_edge_indices, influence_outputs, 0.0)
+        return output_masks
 
 # ===================================================
 # TRAINING FUNCTIONS 
@@ -298,7 +302,7 @@ def train_gnn(
         obs_dim = 4  # Full state (x, y, vx, vy)
 
     # Create train state
-    input_shape = (batch_size, T_observation * N_agents * obs_dim)
+    input_shape = (batch_size, T_observation, N_agents, obs_dim)
     state = create_train_state(gnn_model, optimizer, input_shape, rng)
 
     training_losses = []
@@ -327,6 +331,30 @@ def train_gnn(
     total_steps = num_epochs * ((len(training_data) + batch_size - 1) // batch_size)
     training_pbar = tqdm(total=total_steps, desc="Training Progress", position=0)
 
+    training_data_by_n_agents = sort_by_n_agents(training_data)
+    validation_data_by_n_agents = sort_by_n_agents(validation_data)
+
+    for epoch in range(num_epochs):
+        epoch_losses = []
+        epoch_binary_losses = []
+        epoch_sparsity_losses = []
+        epoch_similarity_losses = []
+
+        # setup data batches
+        training_data_batches = organize_batches(training_data_by_n_agents)
+        random.shuffle(training_data_batches)
+
+        num_batches = len(training_data_batches)
+
+        batch_pbar = tqdm(range(num_batches), 
+                         desc=f"Epoch {epoch+1}/{num_epochs} - Batches", 
+                   position=1, leave=False)
+        
+        for batch_idx in range(num_batches):
+            batch_data = training_data_batches[batch_idx]
+            observations, reference_trajectories = prepare_batch_for_training(batch_data, obs_input_type)
+            rng, step_key = jax.random.split(rng)
+
 
 
 if __name__ == "__main__":
@@ -340,7 +368,6 @@ if __name__ == "__main__":
         gru_hidden_size=gru_hidden_size, 
         dropout_rate=dropout_rate, 
         obs_input_type="full", 
-        mask_output_dim=N_agents - 1, 
         deterministic=True, 
         num_message_passing_rounds=num_message_passing_rounds
     )
@@ -355,6 +382,22 @@ if __name__ == "__main__":
     
     print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
 
+    # Test the GNN model with dummy input
+    print("Testing GNN model with dummy input...")
+    
+    # Create dummy input with shape (batch_size, T_observation, N_agents, state_dim)
+    dummy_input = jax.random.normal(rng, (batch_size, T_observation, N_agents, state_dim))
+    print(f"Dummy input shape: {dummy_input.shape}")
+    
+    # Initialize the model parameters
+    model_params = gnn_model.init(rng, dummy_input)
+    print(f"Model parameters initialized successfully")
+    
+    # Apply the model
+    output = gnn_model.apply(model_params, dummy_input)
+    print(f"Model output shape: {output.shape}")
+    print(f"Model output (first sample): {output[0]}")
+    
     training_losses, validation_losses, binary_losses, sparsity_losses, \
     ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
     validation_ego_agent_costs, trained_state, log_dir, best_loss, best_epoch = train_gnn(
