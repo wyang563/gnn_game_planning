@@ -126,7 +126,7 @@ class MessageMLP(nn.Module):
 class InfluenceHead(nn.Module):
     hidden_dims: List[int]
     dropout_rate: float = 0.3
-    out_dim: int = N_agents - 1
+    out_dim: int = 1
 
     @nn.compact
     def __call__(self, x, deterministic: bool = True):
@@ -147,14 +147,14 @@ class GNNSelectionNetwork(nn.Module):
     gru_hidden_size: int = 64
     dropout_rate: float = 0.3
     obs_input_type: str = "full"    # "full" or "partial"
-    mask_output_dim: int = N_agents - 1
     deterministic: bool = True
     num_message_passing_rounds: int = num_message_passing_rounds
 
     def encode_gru_features(self, x):
         agent_features = []
+        n_agents = x.shape[2]
 
-        for agent_idx in range(N_agents):
+        for agent_idx in range(n_agents):
             # Extract trajectory for this agent: (batch_size, T_observation, state_dim)
             agent_traj = x[:, :, agent_idx, :]
             
@@ -179,22 +179,23 @@ class GNNSelectionNetwork(nn.Module):
     def create_graph_adj_matrix(self, x):
         # TODO: this will be updated in the future to reflect usage of CBFs to select nearest neighbors
         n_agents = x.shape[2]
-        graph_adj_matrix = ~(jnp.eye(n_agents).astype(jnp.bool_))
+        batch_size = x.shape[0]
+        
+        # Create a random graph adj matrix for each sample in the batch
+        graph_adj_matrix = jax.random.randint(jax.random.PRNGKey(42), (batch_size, n_agents, n_agents), 0, 2)
         graph_adj_matrix = graph_adj_matrix.astype(jnp.float32)
-
-        # tile graph adj matrix to be (B, N, N)
-        graph_adj_matrix = jnp.tile(graph_adj_matrix, (batch_size, 1, 1))
+        
         return graph_adj_matrix
     
-    def message_pass(self, node_encodings, graph_adj_matrix):
+    def message_pass(self, node_encodings, graph_adj_matrix, message_mlp):
+        n_agents = graph_adj_matrix.shape[1]
         # message pass between edges
-        nodes_i = jnp.tile(node_encodings[:, :, None, :], (1, 1, N_agents, 1))
-        nodes_j = jnp.tile(node_encodings[:, None, :, :], (1, N_agents, 1, 1))
+        nodes_i = jnp.tile(node_encodings[:, :, None, :], (1, 1, n_agents, 1))
+        nodes_j = jnp.tile(node_encodings[:, None, :, :], (1, n_agents, 1, 1))
         pair_encodings = jnp.concatenate([nodes_i, nodes_j], axis=-1)
 
         # edge MLP
-        message_mlp = MessageMLP(hidden_dims=message_mlp_dims, dropout_rate=dropout_rate)
-        messages = message_mlp(pair_encodings, deterministic=True)  # (B, N, N, message_dim)
+        messages = message_mlp(pair_encodings, deterministic=self.deterministic)  # (B, N, N, message_dim)
 
         # Mask out messages where there's no edge using jnp.where
         mask = graph_adj_matrix[..., None]  # (B, N, N, 1)
@@ -203,6 +204,7 @@ class GNNSelectionNetwork(nn.Module):
 
         # get indegree of each node
         node_indegrees = jnp.sum(jnp.transpose(graph_adj_matrix, (0, 2, 1)), axis=2)
+        node_indegrees = jnp.where(node_indegrees != 0, node_indegrees, 1e-5) # avoid division by zero
         
         # aggregate messages for each node
         aggregated_messages = jnp.sum(masked_messages, axis=2) / node_indegrees[..., None]  # (B, N, message_dim)
@@ -213,33 +215,127 @@ class GNNSelectionNetwork(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        if self.obs_input_type == "partial":
-            input_dim = 2  # Only position (x, y)
-        else:  # "full"
-            input_dim = 4  # Full state (x, y, vx, vy)
-        
-        # Reshape input to (batch_size, T_observation, N_agents, input_dim)
-        batch_size = x.shape[0]
-        x = x.reshape(batch_size, T_observation, N_agents, input_dim)
-        
+        # assume input is (batch_size, T_observation, N_agents, input_dim)
         # create graph
         graph_adj_matrix = self.create_graph_adj_matrix(x)
         node_encodings = self.encode_gru_features(x) # initial node encodings in the graph
+        message_mlp = MessageMLP(hidden_dims=message_mlp_dims, dropout_rate=dropout_rate)
 
         # message passing
         for _ in range(self.num_message_passing_rounds):
-            node_encodings = self.message_pass(node_encodings, graph_adj_matrix)
+            node_encodings = self.message_pass(node_encodings, graph_adj_matrix, message_mlp)
         
-        # get mask values from influence head
+        # get mask values corresponding to each edge from influence head
         influence_head = InfluenceHead(hidden_dims=influence_head_dims, dropout_rate=dropout_rate)
+
         # Use the ego agent's encoding to generate the mask
         ego_encoding = node_encodings[:, ego_agent_id, :]  # (B, hidden_dim)
-        mask = influence_head(ego_encoding, deterministic=True)  # (B, N_agents - 1)
+        ego_incoming_edge_indices = graph_adj_matrix[:, ego_agent_id, :] == 1
+        ego_incoming_edge_encodings = node_encodings[:, ego_incoming_edge_indices, :]
+        # tile ego encoding to match shape of ego incoming encodings
+        ego_encoding = ego_encoding.repeat(ego_incoming_edge_encodings.shape[1], axis=1)
+        influence_head_inputs = jnp.concatenate([ego_incoming_edge_encodings, ego_encoding], axis=-1)
+        mask = influence_head(influence_head_inputs, deterministic=self.deterministic)  # (B, N_agents - 1)
         return mask
 
+# ===================================================
+# TRAINING FUNCTIONS 
+# ===================================================
+
+def create_train_state(model: nn.Module, optimizer: optax.GradientTransformation, 
+                      input_shape: Tuple[int, ...], rng: jnp.ndarray) -> train_state.TrainState:
+    """Create training state for the model."""
+    dummy_input = jnp.ones(input_shape)
+    variables = model.init(rng, dummy_input)
+    params = variables['params']
+    
+    state = train_state.TrainState.create(
+        apply_fn=model.apply,
+        params=params,
+        tx=optimizer
+    )
+    
+    return state
+
+def train_gnn(
+    gnn_model: nn.Module,
+    training_data: List[Dict[str, Any]],
+    validation_data: List[Dict[str, Any]],
+    num_epochs: int,
+    learning_rate: float,
+    sigma1: float,
+    sigma2: float,
+    batch_size: int,
+    obs_input_type: str,
+    rng: jnp.ndarray,
+) -> Tuple[List[float], List[float], List[float], List[float], List[float], 
+           List[float], List[float], List[float], train_state.TrainState, str, float, int]:
+    
+    # setup log directories
+    config_name = f"gnn_{obs_input_type}_planning_true_goals_maxN_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}"
+    model_log_dir = os.path.join("log", config_name)
+    os.makedirs(model_log_dir, exist_ok=True)
+    print(f"This GNN model type for training logs will be saved under: {model_log_dir}")
+
+    # write data to specific run log directory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_log_dir = os.path.join(model_log_dir, timestamp)
+    os.makedirs(run_log_dir, exist_ok=True)
+
+    # Initialize TensorBoard writer
+    writer = tb.SummaryWriter(run_log_dir)
+    
+    # Create optimizer with weight decay (AdamW)
+    optimizer = optax.adamw(
+        learning_rate=learning_rate,
+        weight_decay=5e-4  # L2 regularization to prevent overfitting
+    )
+
+    # Determine observation dimensions based on input type
+    if obs_input_type == "partial":
+        obs_dim = 2  # Only position (x, y)
+    else:  # "full"
+        obs_dim = 4  # Full state (x, y, vx, vy)
+
+    # Create train state
+    input_shape = (batch_size, T_observation * N_agents * obs_dim)
+    state = create_train_state(gnn_model, optimizer, input_shape, rng)
+
+    training_losses = []
+    validation_losses = []
+    # Track individual loss components over epochs
+    binary_losses = []
+    sparsity_losses = []
+    similarity_losses = []
+    validation_binary_losses = []
+    validation_sparsity_losses = []
+    validation_similarity_losses = []
+    best_loss = float('inf')
+    best_state = None
+    best_epoch = 0
+
+    # Main training loop
+    print(f"Starting PSN training with pretrained goals...")
+    print(f"Training parameters: epochs={num_epochs}, lr={learning_rate}, batch_size={batch_size}")
+    print(f"Loss weights: σ1={sigma1}, σ2={sigma2}")
+    print(f"Training data: {len(training_data)} samples")
+    print(f"Validation data: {len(validation_data)} samples")
+    print(f"Device: {jax.devices()[0]}")
+    print("-" * 80)
+
+    # Main training progress bar
+    total_steps = num_epochs * ((len(training_data) + batch_size - 1) // batch_size)
+    training_pbar = tqdm(total=total_steps, desc="Training Progress", position=0)
+
+
+
 if __name__ == "__main__":
+    print("=" * 80)
+    print("GNN Training") 
+    print("=" * 80)
+
     # Initialize the model
-    model = GNNSelectionNetwork(
+    gnn_model = GNNSelectionNetwork(
         hidden_dims=message_mlp_dims, 
         gru_hidden_size=gru_hidden_size, 
         dropout_rate=dropout_rate, 
@@ -250,29 +346,32 @@ if __name__ == "__main__":
     )
     
     # Create dummy input data
-    rng = jax.random.PRNGKey(42)
-    dummy_input = jax.random.normal(rng, (batch_size, T_observation, N_agents, 4))
+    rng = jax.random.PRNGKey(config.training.seed)
+
+    # Load reference trajectories
+    reference_dir = os.path.join("src/data", config.training.gnn_data_dir)
+    print(f"Loading reference trajectories from directory: {reference_dir}")
+    training_data, validation_data = load_reference_trajectories(reference_dir)
     
-    print(f"Input shape: {dummy_input.shape}")
-    print(f"Batch size: {batch_size}")
-    print(f"Observation length: {T_observation}")
-    print(f"Number of agents: {N_agents}")
-    print(f"State dimension: 4")
-    
-    # Initialize model parameters
-    params = model.init(rng, dummy_input)
-    print(f"Model initialized successfully")
-    print(f"Number of parameters: {sum(x.size for x in jax.tree.leaves(params))}")
-    
-    # Forward pass
-    output = model.apply(params, dummy_input)
-    print(f"Forward pass completed")
-    print(f"Output shape: {output.shape}")
-    print(f"Output type: {type(output)}")
+    print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
+
+    training_losses, validation_losses, binary_losses, sparsity_losses, \
+    ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
+    validation_ego_agent_costs, trained_state, log_dir, best_loss, best_epoch = train_gnn(
+        gnn_model,
+        training_data,
+        validation_data,
+        num_epochs=num_epochs,
+        learning_rate=learning_rate,
+        sigma1=sigma1,
+        sigma2=sigma2,
+        batch_size=batch_size,
+        rng=rng,
+        obs_input_type=config.psn.obs_input_type
+    )
 
 
 
 
-        
 
 

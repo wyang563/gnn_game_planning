@@ -115,11 +115,17 @@ gnn:
   message_mlp_dims: [128, 64]
   influence_head_dims: [128, 64]
 
+  # observation length
+  observation_length: 10    # Length of observation history (K_observation)
+  obs_input_type: "full"    # Observation input type ["full", "partial"]
+
 training:
   # Data source for training
+  model_type: "gnn"
   # IMPORTANT: Training should ALWAYS use reference trajectories
   data_source: "reference_trajectories"     # Use reference trajectories for training
   data_dir: "reference_trajectories_${N_agents}p"  # Directory containing reference trajectory data
+  gnn_data_dir: "reference_trajectories_upto_${N_agents}p"  # Directory containing reference trajectory data for GNN training
   
   # Data split configuration
   train_samples: 0.75         # Number of samples to use for training (first N samples)
@@ -151,6 +157,9 @@ testing:
   # PSN testing data  
   psn_data_source: "receding_horizon_trajectories"
   psn_data_dir: "receding_horizon_trajectories_${N_agents}p"  # PSN tests on receding horizon trajectories
+
+  gnn_data_source: "receding_horizon_trajectories"
+  gnn_data_dir: "reference_trajectories_upto_${N_agents}p"  # GNN tests on reference trajectories
   
   # Data split configuration (shared across all testing)
   train_samples: 384         # Number of samples to use for training (first N samples)
