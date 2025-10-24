@@ -38,7 +38,7 @@ import random
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 from load_config import load_config
-from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training, extract_true_goals_from_batch, sort_by_n_agents, organize_batches
+from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training_gnn, extract_true_goals_from_batch, sort_by_n_agents, organize_batches
 from models.loss_funcs import binary_loss, mask_sparsity_loss, batch_similarity_loss
 
 # ============================================================================
@@ -115,7 +115,7 @@ class MessageMLP(nn.Module):
     out_dim: int = gru_hidden_size
 
     @nn.compact
-    def __call__(self, x, deterministic: bool = True):
+    def __call__(self, x, deterministic: bool = False):
         for i, hidden_dim in enumerate(self.hidden_dims):
             x = nn.Dense(features=hidden_dim, name=f'message_mlp_{i}')(x)
             x = nn.relu(x)
@@ -130,7 +130,7 @@ class InfluenceHead(nn.Module):
     out_dim: int = 1
 
     @nn.compact
-    def __call__(self, x, deterministic: bool = True):
+    def __call__(self, x, deterministic: bool = False):
         for i, hidden_dim in enumerate(self.hidden_dims):
             x = nn.Dense(features=hidden_dim, name=f'edge_mask_mlp_{i}')(x)
             x = nn.relu(x)
@@ -148,7 +148,7 @@ class GNNSelectionNetwork(nn.Module):
     gru_hidden_size: int = 64
     dropout_rate: float = 0.3
     obs_input_type: str = "full"    # "full" or "partial"
-    deterministic: bool = True
+    deterministic: bool = False
     num_message_passing_rounds: int = num_message_passing_rounds
 
     def encode_gru_features(self, x):
@@ -188,7 +188,7 @@ class GNNSelectionNetwork(nn.Module):
         
         return graph_adj_matrix
     
-    def message_pass(self, node_encodings, graph_adj_matrix, message_mlp):
+    def message_pass(self, node_encodings, graph_adj_matrix, message_mlp, deterministic=False):
         n_agents = graph_adj_matrix.shape[1]
         # message pass between edges
         nodes_i = jnp.tile(node_encodings[:, :, None, :], (1, 1, n_agents, 1))
@@ -196,7 +196,7 @@ class GNNSelectionNetwork(nn.Module):
         pair_encodings = jnp.concatenate([nodes_i, nodes_j], axis=-1)
 
         # edge MLP
-        messages = message_mlp(pair_encodings, deterministic=self.deterministic)  # (B, N, N, message_dim)
+        messages = message_mlp(pair_encodings, deterministic=deterministic)  # (B, N, N, message_dim)
 
         # Mask out messages where there's no edge using jnp.where
         mask = graph_adj_matrix[..., None]  # (B, N, N, 1)
@@ -215,7 +215,7 @@ class GNNSelectionNetwork(nn.Module):
         return node_encodings
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, rngs=None, deterministic=False):
         # assume input is (batch_size, T_observation, N_agents, input_dim)
         # create graph
         graph_adj_matrix = self.create_graph_adj_matrix(x)
@@ -224,7 +224,7 @@ class GNNSelectionNetwork(nn.Module):
 
         # message passing
         for _ in range(self.num_message_passing_rounds):
-            node_encodings = self.message_pass(node_encodings, graph_adj_matrix, message_mlp)
+            node_encodings = self.message_pass(node_encodings, graph_adj_matrix, message_mlp, deterministic)
         
         # get mask values corresponding to each edge from influence head
         influence_head = InfluenceHead(hidden_dims=influence_head_dims, dropout_rate=dropout_rate)
@@ -235,7 +235,7 @@ class GNNSelectionNetwork(nn.Module):
         batch_ego_incoming_edge_indices = transposed_graph_adj_matrix[:, ego_agent_id, :] == 1.0
         ego_encoding_repeated = jnp.tile(ego_encoding[:, None, :], (1, node_encodings.shape[1], 1))
         influence_head_inputs = jnp.concatenate([node_encodings, ego_encoding_repeated], axis=-1)
-        influence_outputs = influence_head(influence_head_inputs, deterministic=self.deterministic)
+        influence_outputs = influence_head(influence_head_inputs, deterministic=deterministic)
         influence_outputs = jnp.squeeze(influence_outputs, axis=-1)
 
         # zero out influence outputs for non-incoming edges
@@ -250,7 +250,7 @@ def create_train_state(model: nn.Module, optimizer: optax.GradientTransformation
                       input_shape: Tuple[int, ...], rng: jnp.ndarray) -> train_state.TrainState:
     """Create training state for the model."""
     dummy_input = jnp.ones(input_shape)
-    variables = model.init(rng, dummy_input)
+    variables = model.init(rng, dummy_input, deterministic=False)
     params = variables['params']
     
     state = train_state.TrainState.create(
@@ -260,6 +260,105 @@ def create_train_state(model: nn.Module, optimizer: optax.GradientTransformation
     )
     
     return state
+
+def train_step(
+    state: train_state.TrainState,
+    batch: Tuple[jnp.ndarray, jnp.ndarray],
+    batch_data: List[Dict[str, Any]],
+    sigma1: float,
+    sigma2: float,
+    rng: jnp.ndarray = None,
+    obs_input_type: str = "full"
+) -> Tuple[train_state.TrainState, jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
+
+    observations, reference_trajectories = batch
+
+    def loss_fn(params):
+        predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
+        predicted_goals = extract_true_goals_from_batch(batch_data)
+        binary_loss_val = binary_loss(predicted_masks)
+        sparsity_loss_val = mask_sparsity_loss(predicted_masks)
+        similarity_loss_val = batch_similarity_loss(predicted_masks, predicted_goals, batch_data, obs_input_type=obs_input_type)
+        total_loss = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
+        return total_loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val)
+    
+    (loss, loss_components), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+
+    # Apply gradient clipping to prevent gradient explosion
+    grad_norm = jax.tree.reduce(lambda x, y: x + jnp.sum(jnp.square(y)), grads, initializer=0.0)
+    grad_norm = jnp.sqrt(grad_norm)
+    
+    max_grad_norm = config.debug.gradient_clip_value
+    if grad_norm > max_grad_norm:
+        scale = max_grad_norm / grad_norm
+        grads = jax.tree.map(lambda g: g * scale, grads)
+    
+    # Apply gradients using the optimizer
+    state = state.apply_gradients(grads=grads)
+    
+    return state, loss, loss_components
+
+def validation_step(state: train_state.TrainState, validation_data: List[Dict[str, Any]],
+                   batch_size: int = 32, ego_agent_id: int = 0, obs_input_type: str = "full") -> Tuple[float, float, float, float, List[jnp.ndarray]]:
+    """
+    Perform validation on the validation dataset.
+    
+    Args:
+        state: Current train state
+        validation_data: Validation dataset
+        goal_model: Pretrained goal inference network
+        goal_trained_state: Trained state of goal inference network
+        batch_size: Batch size for validation
+        ego_agent_id: ID of the ego agent
+        
+    Returns:
+        Tuple of (average validation loss, average binary loss, average sparsity loss, average similarity loss, list of predicted masks)
+    """
+    val_losses = []
+    val_binary_losses = []
+    val_sparsity_losses = []
+    val_similarity_losses = []
+    all_predicted_masks = []
+    
+    # Create validation batches
+    num_val_batches = (len(validation_data) + batch_size - 1) // batch_size
+    
+    for batch_idx in range(num_val_batches):
+        batch_data = validation_data[batch_idx]
+        
+        # Prepare batch for validation
+        observations, reference_trajectories = prepare_batch_for_training_gnn(batch_data, obs_input_type)
+        
+        # Get predicted mask from PSN (validation mode, no dropout)
+        predicted_masks = state.apply_fn({'params': state.params}, observations, deterministic=True)
+        
+        # Store masks for analysis
+        all_predicted_masks.append(predicted_masks)
+        
+        # Extract true goals from reference data
+        predicted_goals = extract_true_goals_from_batch(batch_data)
+        
+        # Compute validation loss components
+        binary_loss_val = binary_loss(predicted_masks)
+        sparsity_loss_val = mask_sparsity_loss(predicted_masks)
+        
+        # Compute similarity loss using game solving
+        similarity_loss_val = batch_similarity_loss(predicted_masks, predicted_goals, batch_data)
+        
+        # Total validation loss (same as training loss for fair comparison)
+        total_loss_val = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
+
+        val_losses.append(float(total_loss_val))
+        val_binary_losses.append(float(binary_loss_val))
+        val_sparsity_losses.append(float(sparsity_loss_val))
+        val_similarity_losses.append(float(similarity_loss_val))
+    
+    avg_val_loss = sum(val_losses) / len(val_losses)
+    avg_val_binary = sum(val_binary_losses) / len(val_binary_losses)
+    avg_val_sparsity = sum(val_sparsity_losses) / len(val_sparsity_losses)
+    avg_val_similarity = sum(val_similarity_losses) / len(val_similarity_losses)
+
+    return avg_val_loss, avg_val_binary, avg_val_sparsity, avg_val_similarity, all_predicted_masks
 
 def train_gnn(
     gnn_model: nn.Module,
@@ -333,6 +432,7 @@ def train_gnn(
 
     training_data_by_n_agents = sort_by_n_agents(training_data)
     validation_data_by_n_agents = sort_by_n_agents(validation_data)
+    validation_data_batches = organize_batches(validation_data_by_n_agents)
 
     for epoch in range(num_epochs):
         epoch_losses = []
@@ -352,10 +452,135 @@ def train_gnn(
         
         for batch_idx in range(num_batches):
             batch_data = training_data_batches[batch_idx]
-            observations, reference_trajectories = prepare_batch_for_training(batch_data, obs_input_type)
+            observations, reference_trajectories = prepare_batch_for_training_gnn(batch_data, obs_input_type)
             rng, step_key = jax.random.split(rng)
+            state, loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val) = train_step(
+                state,
+                (observations, reference_trajectories),
+                batch_data,
+                sigma1,
+                sigma2,
+                step_key,
+                obs_input_type
+            )
 
+            epoch_losses.append(float(loss))
+            epoch_binary_losses.append(float(binary_loss_val))
+            epoch_sparsity_losses.append(float(sparsity_loss_val))
+            epoch_similarity_losses.append(float(similarity_loss_val))
 
+            # Update batch progress bar
+            batch_pbar.set_postfix({
+                'Loss': f'{float(loss):.4f}',
+                'Binary': f'{float(binary_loss_val):.4f}',
+                'Sparsity': f'{float(sparsity_loss_val):.4f}',
+                'Similarity': f'{float(similarity_loss_val):.4f}'
+            })
+            batch_pbar.update(1)
+
+            # Update main training progress bar
+            training_pbar.set_postfix({
+                'Epoch': f'{epoch+1}/{num_epochs}',
+                'Batch': f'{batch_idx+1}/{num_batches}',
+                'Loss': f'{float(loss):.4f}',
+            })
+            training_pbar.update(1)
+    
+        # Close batch progress bar
+        batch_pbar.close()
+
+        # validation step
+        val_loss, val_binary_loss, val_sparsity_loss, val_similarity_loss, val_masks = validation_step(
+            state, validation_data_batches, batch_size, ego_agent_id=ego_agent_id, obs_input_type=obs_input_type)
+        validation_losses.append(val_loss)
+        validation_binary_losses.append(val_binary_loss)
+        validation_sparsity_losses.append(val_sparsity_loss)
+        validation_similarity_losses.append(val_similarity_loss)
+
+        # Calculate average loss for the epoch
+        avg_loss = sum(epoch_losses) / len(epoch_losses)
+        avg_binary_loss = sum(epoch_binary_losses) / len(epoch_binary_losses)
+        avg_sparsity_loss = sum(epoch_sparsity_losses) / len(epoch_sparsity_losses)
+        avg_similarity_loss = sum(epoch_similarity_losses) / len(epoch_similarity_losses)
+        training_losses.append(avg_loss)
+        binary_losses.append(avg_binary_loss)
+        sparsity_losses.append(avg_sparsity_loss)
+        similarity_losses.append(avg_similarity_loss)
+
+        # Track best model based on validation loss
+        if val_loss < best_loss:
+            best_loss = val_loss
+            best_epoch = epoch
+            
+            # Save best model using proper JAX/Flax serialization
+            best_model_path = os.path.join(run_log_dir, "psn_best_model.pkl")
+            model_bytes = flax.serialization.to_bytes(state)
+            with open(best_model_path, 'wb') as f:
+                pickle.dump(model_bytes, f)
+            print(f"\nNew best model found at epoch {epoch + 1} with validation loss: {best_loss:.4f}")
+            print(f"Best model saved to: {best_model_path}")
+        
+        # Save model every 20 epochs
+        if (epoch + 1) % 20 == 0:
+            checkpoint_path = os.path.join(run_log_dir, f"psn_checkpoint_epoch_{epoch + 1}.pkl")
+            model_bytes = flax.serialization.to_bytes(state)
+            with open(checkpoint_path, 'wb') as f:
+                pickle.dump(model_bytes, f)
+            print(f"Checkpoint saved at epoch {epoch + 1}: {checkpoint_path}")
+        
+        # Update main progress bar
+        training_pbar.set_postfix({
+            'Epoch': f'{epoch+1}/{num_epochs}',
+            'Train Loss': f'{avg_loss:.4f}',
+            'Val Loss': f'{val_loss:.4f}',
+        })
+        
+        # Log epoch-level metrics to TensorBoard
+        writer.add_scalar('Loss/Epoch/Training', avg_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Validation', val_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Best', best_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Binary', avg_binary_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Sparsity', avg_sparsity_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Similarity', avg_similarity_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Validation_Binary', val_binary_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Validation_Sparsity', val_sparsity_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Validation_Similarity', val_similarity_loss, epoch)
+        writer.add_scalar('Training/EpochProgress', (epoch + 1) / num_epochs, epoch)
+        
+        # Training progress metrics
+        writer.add_scalar('Progress/EpochProgress', (epoch + 1) / num_epochs, epoch)
+        writer.add_scalar('Progress/LossImprovement', float(best_loss - val_loss), epoch)
+
+        # Add text summary for hyperparameters
+        if epoch == 0:
+            writer.add_text('Hyperparameters', f"""
+            - Number of agents: {N_agents}
+            - Total game steps: {T_total}
+            - Observation steps: {T_observation}
+            - Learning rate: {learning_rate}
+            - Batch size: {batch_size}
+            - Sigma1: {sigma1}
+            - Sigma2: {sigma2}
+            - Total epochs: {num_epochs}
+            """, epoch)
+        
+        if epoch % 10 == 0:
+            print(f"Epoch {epoch}/{num_epochs}, Train Loss: {avg_loss:.4f}, Val Loss: {val_loss:.4f}, Best Val: {best_loss:.4f} (epoch {best_epoch+1})")
+        
+        # Clean up memory after each epoch
+        gc.collect()
+        if hasattr(jax, 'clear_caches'):
+            jax.clear_caches()
+    
+    # Close progress bar
+    training_pbar.close()
+    
+    # Close TensorBoard writer
+    writer.close()
+    
+    print(f"\nTraining completed! Best model found at epoch {best_epoch + 1} with loss: {best_loss:.4f}")
+    
+    return training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, state, log_dir, best_loss, best_epoch
 
 if __name__ == "__main__":
     print("=" * 80)
@@ -381,22 +606,6 @@ if __name__ == "__main__":
     training_data, validation_data = load_reference_trajectories(reference_dir)
     
     print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
-
-    # Test the GNN model with dummy input
-    print("Testing GNN model with dummy input...")
-    
-    # Create dummy input with shape (batch_size, T_observation, N_agents, state_dim)
-    dummy_input = jax.random.normal(rng, (batch_size, T_observation, N_agents, state_dim))
-    print(f"Dummy input shape: {dummy_input.shape}")
-    
-    # Initialize the model parameters
-    model_params = gnn_model.init(rng, dummy_input)
-    print(f"Model parameters initialized successfully")
-    
-    # Apply the model
-    output = gnn_model.apply(model_params, dummy_input)
-    print(f"Model output shape: {output.shape}")
-    print(f"Model output (first sample): {output[0]}")
     
     training_losses, validation_losses, binary_losses, sparsity_losses, \
     ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
@@ -412,6 +621,7 @@ if __name__ == "__main__":
         rng=rng,
         obs_input_type=config.psn.obs_input_type
     )
+
 
 
 

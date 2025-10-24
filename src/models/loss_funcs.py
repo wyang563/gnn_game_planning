@@ -14,7 +14,7 @@ from solver.solve_differentiable import solve_masked_game_differentiable
 config = load_config()
 
 # Game parameters
-N_agents = config.game.N_agents
+# N_agents = config.game.N_agents
 ego_agent_id = config.game.ego_agent_id
 dt = config.game.dt
 T_total = config.game.T_total
@@ -45,7 +45,7 @@ def mask_sparsity_loss(mask: jnp.ndarray) -> jnp.ndarray:
 
 # Similarity loss function helpers
 
-def _observations_to_initial_states(obs_row: jnp.ndarray, obs_input_type: str = "full") -> jnp.ndarray:
+def _observations_to_initial_states(obs_row: jnp.ndarray, n_agents: int, obs_input_type: str = "full") -> jnp.ndarray:
     """Convert a flattened observations row into initial 4D states for each agent.
     obs_row: shape (T_observation * N_agents * obs_dim,)
     returns: (N_agents, 4)
@@ -53,14 +53,14 @@ def _observations_to_initial_states(obs_row: jnp.ndarray, obs_input_type: str = 
     # Determine observation dimension based on input type
     obs_dim = 2 if obs_input_type == "partial" else 4
     
-    traj = obs_row.reshape(T_observation, N_agents, obs_dim)
+    traj = obs_row.reshape(T_observation, n_agents, obs_dim)
     first = traj[0]  # (N_agents, obs_dim)
     
     if obs_input_type == "partial":
         # For partial observations, we only have position (x, y)
         # Set velocity to zero
         pos = first[:, :2]  # (N_agents, 2)
-        vel = jnp.zeros((N_agents, 2))  # (N_agents, 2) - zero velocity
+        vel = jnp.zeros((n_agents, 2))  # (N_agents, 2) - zero velocity
         return jnp.concatenate([pos, vel], axis=-1)
     else:
         # For full observations, we have position and velocity
@@ -108,20 +108,21 @@ def compute_similarity_loss_from_arrays(agents: list,
                                         initial_states: jnp.ndarray,
                                         predicted_goals_row: jnp.ndarray,
                                         predicted_mask_row: jnp.ndarray,
-                                        ref_ego_traj: jnp.ndarray) -> jnp.ndarray:
+                                        ref_ego_traj: jnp.ndarray,
+                                        n_agents: int) -> jnp.ndarray:
     """Fully-JAX similarity loss using arrays only (no Python dict access).
     - initial_states: (N_agents, 4)
     - predicted_goals_row: (N_agents * 2,) or (N_agents, 2)
     - predicted_mask_row: (N_agents - 1,)
     - ref_ego_traj: (T_reference, state_dim)
     """
-    targets = predicted_goals_row.reshape(N_agents, 2)
+    targets = predicted_goals_row.reshape(n_agents, 2)
     mask_values = predicted_mask_row
 
     # Use the new differentiable game solver directly
     state_trajectories, _ = solve_masked_game_differentiable(
         agents,
-        [initial_states[i] for i in range(N_agents)],
+        [initial_states[i] for i in range(n_agents)],
         targets,
         mask_values,
         num_iters=num_iters,
@@ -132,6 +133,7 @@ def compute_similarity_loss_from_arrays(agents: list,
 
 def batch_similarity_loss(predicted_masks: jnp.ndarray, predicted_goals: jnp.ndarray, batch_data: List[Dict[str, Any]], obs_input_type: str = "full") -> jnp.ndarray:
     """Batch similarity loss: encourages predicted masks to be similar to predicted goals."""
+    n_agents = batch_data[0]['metadata']['n_agents']
     shared_agents = [
         PointAgent(
             dt=dt, 
@@ -144,7 +146,7 @@ def batch_similarity_loss(predicted_masks: jnp.ndarray, predicted_goals: jnp.nda
             ctrl_weight=ctrl_weight, 
             device=device
         ) 
-        for _ in range(N_agents)
+        for _ in range(n_agents)
     ]
     observations, ref_trajs = prepare_batch_for_training(batch_data, obs_input_type)
 
@@ -153,8 +155,8 @@ def batch_similarity_loss(predicted_masks: jnp.ndarray, predicted_goals: jnp.nda
         goals = predicted_goals[i]
         obs_row = observations[i]
         ref_ego = ref_trajs[i]
-        init_states = _observations_to_initial_states(obs_row, obs_input_type)
-        return compute_similarity_loss_from_arrays(shared_agents, init_states, goals, mask, ref_ego)
+        init_states = _observations_to_initial_states(obs_row, n_agents, obs_input_type)
+        return compute_similarity_loss_from_arrays(shared_agents, init_states, goals, mask, ref_ego, n_agents)
 
     valid_bs = min(predicted_masks.shape[0], observations.shape[0])
     losses = jax.vmap(per_sample)(jnp.arange(valid_bs))

@@ -170,6 +170,50 @@ def prepare_batch_for_training(batch_data: List[Dict[str, Any]], obs_input_type:
     
     return batch_obs, batch_ref_traj
 
+def prepare_batch_for_training_gnn(batch_data: List[Dict[str, Any]], obs_input_type: str = "full") -> Tuple[jnp.ndarray, jnp.ndarray]:
+    # Determine observation dimensions based on input type
+    if obs_input_type == "partial":
+        obs_dim = 2  # Only position (x, y)
+    else:  # "full"
+        obs_dim = 4  # Full state (x, y, vx, vy)
+
+    batch_obs = []
+    batch_ref_traj = []   
+    n_agents = batch_data[0]['metadata']['n_agents']
+
+    for sample_data in batch_data:
+        ego_agent_id = config.game.ego_agent_id
+        
+        # Extract observation trajectory
+        obs_traj = extract_observation_trajectory(sample_data, obs_input_type)
+        batch_obs.append(obs_traj)
+        
+        # Extract ego reference trajectory
+        ego_ref_traj = extract_ego_reference_trajectory(sample_data, ego_agent_id)
+        if ego_ref_traj.shape[0] != T_reference:
+            if ego_ref_traj.shape[0] < T_reference:
+                pad_size = T_reference - ego_ref_traj.shape[0]
+                last_state = ego_ref_traj[-1:]
+                padding = jnp.tile(last_state, (pad_size, 1))
+                ego_ref_traj = jnp.concatenate([ego_ref_traj, padding], axis=0)
+            else:
+                ego_ref_traj = ego_ref_traj[:T_reference]
+        batch_ref_traj.append(ego_ref_traj)
+    
+    # Pad batch if necessary
+    if len(batch_obs) < batch_size:
+        pad_size = batch_size - len(batch_obs)
+        obs_pad = jnp.zeros((pad_size, T_observation, n_agents, obs_dim))
+        batch_obs.extend([obs_pad[i] for i in range(pad_size)])
+        ref_pad = jnp.zeros((pad_size, T_reference, state_dim))
+        batch_ref_traj.extend([ref_pad[i] for i in range(pad_size)])
+    
+    # Convert to JAX arrays
+    batch_obs = jnp.stack(batch_obs)
+    batch_ref_traj = jnp.stack(batch_ref_traj)
+    
+    return batch_obs, batch_ref_traj
+
 def extract_true_goals_from_batch(batch_data: List[Dict[str, Any]]) -> jnp.ndarray:
     """
     Extract true goals from batch data for training with true goals.
