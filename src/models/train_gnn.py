@@ -370,12 +370,13 @@ def train_gnn(
     sigma2: float,
     batch_size: int,
     obs_input_type: str,
+    num_message_passing_rounds: int,
     rng: jnp.ndarray,
 ) -> Tuple[List[float], List[float], List[float], List[float], List[float], 
            List[float], List[float], List[float], train_state.TrainState, str, float, int]:
     
     # setup log directories
-    config_name = f"gnn_{obs_input_type}_planning_true_goals_maxN_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}"
+    config_name = f"gnn_{obs_input_type}_planning_true_goals_maxN_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}_mp_{num_message_passing_rounds}"
     model_log_dir = os.path.join("log", config_name)
     os.makedirs(model_log_dir, exist_ok=True)
     print(f"This GNN model type for training logs will be saved under: {model_log_dir}")
@@ -619,7 +620,8 @@ if __name__ == "__main__":
         sigma2=sigma2,
         batch_size=batch_size,
         rng=rng,
-        obs_input_type=config.psn.obs_input_type
+        obs_input_type=config.psn.obs_input_type,
+        num_message_passing_rounds=num_message_passing_rounds,
     )
 
 

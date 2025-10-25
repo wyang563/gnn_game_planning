@@ -95,9 +95,9 @@ psn:
 
 gnn:
   # Training parameters
-  learning_rate: 0.001      # Learning rate for Adam optimizer
+  learning_rate: 0.002      # Learning rate for Adam optimizer
   batch_size: 32            # Batch size for training
-  num_epochs: 100            # Number of training epochs
+  num_epochs: 50            # Number of training epochs
   dropout_rate: 0.3
 
   # Loss function weights
@@ -108,7 +108,7 @@ gnn:
   edge_metric: "fully_connected"
 
   # message passing rounds
-  num_message_passing_rounds: 5
+  num_message_passing_rounds: 0
 
   # dimensions
   gru_hidden_size: 64

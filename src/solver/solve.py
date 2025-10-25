@@ -28,6 +28,39 @@ def create_loss_functions(agents, mode):
             agent.create_loss_functions_no_mask()
 
 # created batched loss functions (this is only for data generation when other x_trajs is the same size dims for all agents)
+def create_batched_loss_functions_mask(agents, device):
+    dummy_agent: PointAgent = agents[0]
+    # Define batched functions that work on arrays of agent data
+    def batched_linearize_dyn(x0s, u_trajs):
+        """Batched version of linearize_dyn for all agents."""
+        def single_agent_linearize_dyn(x0, u_traj):
+            return dummy_agent.linearize_dyn(x0, u_traj)
+        return vmap(single_agent_linearize_dyn)(x0s, u_trajs)
+
+    def batched_linearize_loss(x_trajs, u_trajs, ref_trajs, other_trajs, masks):
+        """Batched version of linearize_loss for all agents."""
+        def single_agent_linearize_loss(x_traj, u_traj, ref_traj, other_traj, mask):
+            return dummy_agent.linearize_loss(x_traj, u_traj, ref_traj, other_traj, mask)
+        return vmap(single_agent_linearize_loss)(x_trajs, u_trajs, ref_trajs, other_trajs, masks)
+    
+    def batched_solve(A_trajs, B_trajs, a_trajs, b_trajs):
+        """Batched version of solve for all agents."""
+        def single_agent_solve(A_traj, B_traj, a_traj, b_traj):
+            return dummy_agent.solve(A_traj, B_traj, a_traj, b_traj)
+        return vmap(single_agent_solve)(A_trajs, B_trajs, a_trajs, b_trajs)
+    
+    def batched_loss(x_trajs, u_trajs, ref_trajs, other_trajs, masks):
+        """Batched version of loss for all agents."""
+        def single_agent_loss(x_traj, u_traj, ref_traj, other_traj, mask):
+            return dummy_agent.loss(x_traj, u_traj, ref_traj, other_traj, mask)
+        return vmap(single_agent_loss)(x_trajs, u_trajs, ref_trajs, other_trajs, masks)
+
+    jit_batched_linearize_dyn = jit(batched_linearize_dyn, device=device)
+    jit_batched_linearize_loss = jit(batched_linearize_loss, device=device)
+    jit_batched_solve = jit(batched_solve, device=device)
+    jit_batched_loss = jit(batched_loss, device=device)
+    return jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss
+
 def create_batched_loss_functions_no_mask(agents, device):
     dummy_agent: PointAgent = agents[0]
     # Define batched functions that work on arrays of agent data
@@ -112,6 +145,34 @@ def solve_ilqgames_sequential(agents, initial_states, ref_trajs, num_iters, u_di
             control_updates.append(v_traj)
         for i in range(n_agents):
             control_trajs[i] += step_size * control_updates[i]
+    end = time.time()
+    total_time = end - start
+    return state_trajs, control_trajs, total_time
+
+def solve_ilqgames_parallel_mask(agents, initial_states, ref_trajs, num_iters, u_dim, tsteps, step_size, device, masks):
+    start = time.time()
+    n_agents = len(agents)
+
+    # initialize batched functions
+    jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss = create_batched_loss_functions_mask(agents, device)
+
+    # initialize batched arrays
+    control_trajs = jnp.zeros((n_agents, tsteps, u_dim))
+    init_states = jnp.array([initial_states[i] for i in range(n_agents)])
+    ref_trajs = jnp.array([ref_trajs[i] for i in range(n_agents)])
+
+    for _ in range(num_iters + 1):
+        x_trajs, A_trajs, B_trajs = jit_batched_linearize_dyn(init_states, control_trajs)
+        other_states = jnp.array([[x_trajs[j] for j in range(n_agents) if j != i] for i in range(n_agents)])
+        other_states = other_states.transpose(0, 2, 1, 3)
+        a_trajs, b_trajs = jit_batched_linearize_loss(x_trajs, control_trajs, ref_trajs, other_states, masks)
+        v_trajs, _ = jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
+        control_trajs += step_size * v_trajs
+
+    # decompose results into lists
+    state_trajs = [x_trajs[i] for i in range(n_agents)]
+    control_trajs = [control_trajs[i] for i in range(n_agents)]
+
     end = time.time()
     total_time = end - start
     return state_trajs, control_trajs, total_time
@@ -279,7 +340,7 @@ if __name__ == "__main__":
     agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
     create_loss_functions(agents, "no_mask")
     # state_trajs, control_trajs, total_time = solve_ilqgames_sequential(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size)
-    state_trajs, control_trajs, total_time = solve_ilqgames_parallel(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)
+    state_trajs, control_trajs, total_time = solve_ilqgames_parallel_no_mask(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)
     print(f"Total solve time: {total_time}")
 
     sample_data = save_trajectory_sample(
