@@ -207,7 +207,7 @@ class PlayerSelectionNetwork(nn.Module):
 # MODEL LOADING UTILITIES
 # ============================================================================
 
-def load_trained_models(psn_model_path: Optional[str], obs_input_type: str = "full") -> Tuple[Optional[PlayerSelectionNetwork], Any]:
+def load_trained_psn_models(psn_model_path: Optional[str], obs_input_type: str = "full") -> Tuple[Optional[PlayerSelectionNetwork], Any]:
     """
     Load trained PSN model from files.
     

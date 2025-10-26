@@ -32,7 +32,7 @@ from lqrax import iLQR
 from load_config import load_config, get_device_config, setup_jax_config
 
 # Import model classes
-from models.train_mlp import PlayerSelectionNetwork, load_trained_models 
+from models.train_mlp import PlayerSelectionNetwork, load_trained_psn_models 
 
 # Import baselines
 from models.baselines import baseline_selection
@@ -1375,7 +1375,7 @@ def run_receding_horizon_testing(psn_model_path: str = None,
         if psn_model_path is None:
             raise ValueError("PSN model path must be provided when use_baseline=False")
         
-        psn_model, psn_trained_state = load_trained_models(psn_model_path, config.psn.obs_input_type)
+        psn_model, psn_trained_state = load_trained_psn_models(psn_model_path, config.psn.obs_input_type)
         print(f"✓ PSN model loaded successfully")
     else:
         print(f"Using baseline method: {baseline_mode}")

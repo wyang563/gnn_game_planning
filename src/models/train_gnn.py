@@ -242,6 +242,25 @@ class GNNSelectionNetwork(nn.Module):
         output_masks = jnp.where(batch_ego_incoming_edge_indices, influence_outputs, 0.0)
         return output_masks
 
+# ============================================================================
+# MODEL LOADING UTILITIES
+# ============================================================================
+def load_trained_gnn_models(gnn_model_path: Optional[str], obs_input_type: str = "full") -> Tuple[Optional[GNNSelectionNetwork], Any]:
+    """
+    Load trained GNNSelectionNetwork model from files.
+    """
+    if gnn_model_path is not None:
+        print(f"Loading trained GNNSelectionNetwork model from: {gnn_model_path}")
+        with open(gnn_model_path, "rb") as f:
+            gnn_model_bytes = pickle.load(f)
+        gnn_model = GNNSelectionNetwork(hidden_dims=message_mlp_dims, gru_hidden_size=gru_hidden_size, dropout_rate=dropout_rate, obs_input_type=obs_input_type)
+        gnn_trained_state = flax.serialization.from_bytes(gnn_model, gnn_model_bytes)
+        print("✓ GNNSelectionNetwork model loaded successfully")
+    else:
+        print("No GNNSelectionNetwork model provided (using baseline method)")
+        gnn_model, gnn_trained_state = None, None
+    return gnn_model, gnn_trained_state
+
 # ===================================================
 # TRAINING FUNCTIONS 
 # ===================================================
