@@ -25,7 +25,7 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
         agents: List of selected agents (used for configuration only)
         initial_states: List of initial states for selected agents
         target_positions: Target positions for selected agents
-        mask_values: Mask values for collision avoidance
+        mask_values: Mask values for collision avoidance (n_agents long, includes ego at index 0)
         num_iters: Number of optimization iterations
         
     Returns:
@@ -121,10 +121,11 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
                     
                     if agent_idx == 0:  # Ego agent
                         # For ego agent, collision cost is weighted by the mask values of other agents
-                        # other_xs[i] corresponds to agent i+1, use mask index i
-                        mask_idx = i
-                        if mask_idx < len(mask_values):
-                            agent_mask_value = mask_values[mask_idx]
+                        # other_xs[i] corresponds to agent i+1 in the full game, so use mask_values[i+1]
+                        # mask_values is n_agents long: [ego_mask, agent1_mask, agent2_mask, ...]
+                        other_agent_idx = i + 1  # Agent index in the full game
+                        if other_agent_idx < len(mask_values):
+                            agent_mask_value = mask_values[other_agent_idx]
                             collision_cost += config.optimization.collision_weight * agent_mask_value * jnp.exp(-config.optimization.collision_scale * distance_squared)
                     else:  # Non-ego agent
                         # For other agents, collision cost is always full (they're always "selected" when in the game)

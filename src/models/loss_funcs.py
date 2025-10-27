@@ -7,6 +7,7 @@ from load_config import load_config, get_device_config
 from solver.point_agent import PointAgent
 from data.ref_traj_data_loading import prepare_batch_for_training
 from solver.solve_differentiable import solve_masked_game_differentiable
+from data.ref_traj_data_loading import extract_observation_trajectory 
 
 # ============================================================================
 # GLOBAL PARAMETERS
@@ -267,13 +268,12 @@ def prepare_batch_for_ego_cost(batch_data: List[Dict[str, Any]], obs_input_type:
         ref_trajs: Batch of ego reference trajectories (batch_size, T_reference, state_dim)
         all_agents_ref_trajs: List of reference trajectories for all agents (batch_size, List of N_agents trajectories)
     """
-    from data.ref_traj_data_loading import extract_observation_trajectory, extract_ego_reference_trajectory
     
     # Determine observation dimensions based on input type
-    if obs_input_type == "partial":
-        obs_dim = 2  # Only position (x, y)
-    else:  # "full"
-        obs_dim = 4  # Full state (x, y, vx, vy)
+    # if obs_input_type == "partial":
+    #     obs_dim = 2  # Only position (x, y)
+    # else:  # "full"
+    #     obs_dim = 4  # Full state (x, y, vx, vy)
     
     batch_obs = []
     batch_ref_traj = []
@@ -367,7 +367,6 @@ def compute_ego_agent_cost_from_arrays(agents: list,
     # Compute ego agent's total game cost using actual game results
     return ego_agent_game_cost(ego_state_traj, ego_control_traj, other_agents_trajs, mask_values, ref_ego_traj, apply_masks)
 
-
 def batch_ego_agent_cost(predicted_masks: jnp.ndarray,
                          predicted_goals: jnp.ndarray,
                          batch_data: List[Dict[str, Any]],
@@ -426,4 +425,3 @@ def batch_ego_agent_cost(predicted_masks: jnp.ndarray,
     valid_bs = min(predicted_masks.shape[0], observations.shape[0])
     costs = jax.vmap(per_sample)(jnp.arange(valid_bs))
     return jnp.mean(costs)
-

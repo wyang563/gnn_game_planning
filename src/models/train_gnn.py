@@ -39,7 +39,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 from load_config import load_config
 from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training_gnn, extract_true_goals_from_batch, sort_by_n_agents, organize_batches
-from models.loss_funcs import binary_loss, mask_sparsity_loss, batch_similarity_loss
+from models.loss_funcs import binary_loss, mask_sparsity_loss, batch_similarity_loss, batch_ego_agent_cost
 
 # ============================================================================
 # GLOBAL PARAMETERS
@@ -293,7 +293,7 @@ def train_step(
 
     observations, reference_trajectories = batch
 
-    def loss_fn(params):
+    def loss_fn_similarity(params):
         predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
         predicted_goals = extract_true_goals_from_batch(batch_data)
         binary_loss_val = binary_loss(predicted_masks)
@@ -302,7 +302,16 @@ def train_step(
         total_loss = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
         return total_loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val)
     
-    (loss, loss_components), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+    def loss_fn_ego_cost(params):
+        predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
+        predicted_goals = extract_true_goals_from_batch(batch_data)
+        binary_loss_val = binary_loss(predicted_masks)
+        sparsity_loss_val = mask_sparsity_loss(predicted_masks)
+        ego_cost_loss_val = batch_ego_agent_cost(predicted_masks, predicted_goals, batch_data, obs_input_type=obs_input_type, apply_masks=False)
+        total_loss = ego_cost_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
+        return total_loss, (binary_loss_val, sparsity_loss_val, ego_cost_loss_val)
+    
+    (loss, loss_components), grads = jax.value_and_grad(loss_fn_similarity, has_aux=True)(state.params)
 
     # Apply gradient clipping to prevent gradient explosion
     grad_norm = jax.tree.reduce(lambda x, y: x + jnp.sum(jnp.square(y)), grads, initializer=0.0)

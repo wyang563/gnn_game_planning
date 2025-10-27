@@ -269,6 +269,8 @@ def train_step(state: train_state.TrainState, batch: Tuple[jnp.ndarray, jnp.ndar
 
     def loss_fn(params):
         predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
+        # modify masks to include ego agent
+        predicted_masks = jnp.concatenate([jnp.zeros((predicted_masks.shape[0], 1)), predicted_masks], axis=1)
         predicted_goals = extract_true_goals_from_batch(batch_data)
         binary_loss_val = binary_loss(predicted_masks)
         sparsity_loss_val = mask_sparsity_loss(predicted_masks)

@@ -52,7 +52,9 @@ def generate_receding_horizon_trajectories(**kwargs):
     num_existing_samples = len(json_files)
     collision_weight, collision_scale, ctrl_weight = weights
 
-    for sample_id in tqdm(range(num_existing_samples), total=num_existing_samples, desc="Generating receding horizon trajectories"):
+    num_existing_receding_horizon_samples = len(os.listdir(out_dir)) // 2
+
+    for sample_id in tqdm(range(num_existing_receding_horizon_samples, num_existing_samples), total=num_existing_samples - num_existing_receding_horizon_samples, desc="Generating receding horizon trajectories"):
         json_file = json_files[sample_id]
         with open(json_file, 'r') as f:
             sample_data = json.load(f)
