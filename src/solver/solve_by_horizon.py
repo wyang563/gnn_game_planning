@@ -82,13 +82,22 @@ def solve_by_horizon(
             past_x_trajs = past_x_trajs.reshape(n_agents, -1)
         elif model_type == "gnn":
             past_x_trajs = past_x_trajs.transpose(1, 0, 2)
+        elif model_type == "all":
+            pass
 
         batch_past_x_trajs = past_x_trajs[None, ...]
-        ego_masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
-        ego_masks = ego_masks[0]
-        if model_type == "mlp":
-            final_masks_mlp = jnp.zeros((n_agents))
-            ego_masks = final_masks_mlp.at[1:].set(ego_masks)
+        
+        # calculate ego masks based off model player selection type
+        if model_type in ["mlp", "gnn"]:
+            ego_masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
+            ego_masks = ego_masks[0]
+            if model_type == "mlp":
+                final_masks_mlp = jnp.zeros((n_agents))
+                ego_masks = final_masks_mlp.at[1:].set(ego_masks)
+        elif model_type == "all":
+            ego_masks = jnp.ones((n_agents))
+            ego_masks = ego_masks.at[0].set(0.0)
+
         # threshold ego masks
         ego_masks = jnp.where(ego_masks > mask_threshold, 1.0, 0.0)
         simulation_masks.append(ego_masks)

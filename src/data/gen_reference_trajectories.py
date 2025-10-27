@@ -47,7 +47,16 @@ def generate_reference_trajectories(**kwargs):
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
             create_loss_functions(agents, "no_mask")
         elif gen_type == "variable":
-            n_agents = random.randint(2, upper_bound_agents)
+            # make it twice as more likely to generate n > 5 agents than n < 5 agents
+            selection_pool = []
+            for i in range(2, upper_bound_agents + 1):
+                if i < 4:
+                    selection_pool.extend([i] * 1)
+                elif 4 <= i < 6:
+                    selection_pool.extend([i] * 2)
+                else:
+                    selection_pool.extend([i] * 3)
+            n_agents = random.choice(selection_pool)
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
             create_loss_functions(agents, "no_mask")
         else:
