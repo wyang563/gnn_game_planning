@@ -153,6 +153,7 @@ class GNNSelectionNetwork(nn.Module):
 
     def encode_gru_features(self, x):
         agent_features = []
+        batch_size = x.shape[0]
         n_agents = x.shape[2]
 
         for agent_idx in range(n_agents):

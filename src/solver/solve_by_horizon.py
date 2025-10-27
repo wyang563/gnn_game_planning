@@ -23,6 +23,7 @@ from flax import linen as nn
 from utils.goal_init import random_init
 from models.train_gnn import GNNSelectionNetwork, load_trained_gnn_models
 from models.train_mlp import PlayerSelectionNetwork, load_trained_psn_models
+from tqdm import tqdm
 
 def solve_by_horizon(
     agents: list[PointAgent],
@@ -47,15 +48,22 @@ def solve_by_horizon(
     control_trajs = jnp.zeros((n_agents, tsteps, u_dim))
     init_states = jnp.array([initial_states[i] for i in range(n_agents)])
 
-    for iter in range(tsteps + 1):
-        # get mask horizon input trajs
+    for iter in tqdm(range(tsteps + 1)):
+        # setup horizon arrays
         x_trajs, _, _ = jit_batched_linearize_dyn(init_states, control_trajs)
+        horizon_x0s = x_trajs[:, iter]
+        horizon_u_trajs = jnp.zeros((n_agents, tsteps, u_dim))
+
+        start_ind = iter
+        end_ind = min(start_ind + tsteps, tsteps)
+        horizon_ref_trajs = ref_trajs[:, start_ind:end_ind, :]
+        if horizon_ref_trajs.shape[1] < tsteps:
+            padding = jnp.tile(horizon_ref_trajs[:, -1:], (1, tsteps - horizon_ref_trajs.shape[1], 1))
+            horizon_ref_trajs = jnp.concatenate([horizon_ref_trajs, padding], axis=1)
+
+        # get mask horizon input trajs
         start_ind = max(0, iter - mask_horizon)
         end_ind = max(iter, 1)
-
-        # setup horizon arrays
-        horizon_x0s = x_trajs[:, iter]
-        horizon_u_trajs = jnp.zeros((n_agents, mask_horizon, u_dim))
 
         # get past x_trajs
         past_x_trajs = x_trajs[:, start_ind:end_ind, :]
@@ -68,23 +76,25 @@ def solve_by_horizon(
             past_x_trajs = past_x_trajs.reshape(n_agents, -1)
         elif model_type == "gnn":
             past_x_trajs = past_x_trajs.transpose(1, 0, 2)
-        # batch past x_trajs
-        past_x_trajs = past_x_trajs[None, ...]
-        masks = model.apply({'params': model_state['params']}, past_x_trajs, deterministic=True)
 
-        start_ind = iter
-        end_ind = min(start_ind + tsteps, tsteps)
-        horizon_ref_trajs = ref_trajs[:, start_ind:end_ind, :]
-        if horizon_ref_trajs.shape[1] < mask_horizon:
-            padding = jnp.tile(horizon_ref_trajs[:, -1:], (1, mask_horizon - horizon_ref_trajs.shape[1], 1))
-            horizon_ref_trajs = jnp.concatenate([horizon_ref_trajs, padding], axis=1)
+        # batch past x_trajs
+        batch_past_x_trajs = [past_x_trajs]
+        for i in range(1, n_agents):
+            # place index i at start of past_x_trajs
+            temp = past_x_trajs[:, 0]
+            past_x_trajs = past_x_trajs.at[:, 0].set(past_x_trajs[:, i])
+            past_x_trajs = past_x_trajs.at[:, i].set(temp)
+            batch_past_x_trajs.append(past_x_trajs)
+
+        batch_past_x_trajs = jnp.array(batch_past_x_trajs)
+        masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
 
         # game solving optimization loop 
         for _ in range(num_iters + 1):
             horizon_x_trajs, A_trajs, B_trajs = jit_batched_linearize_dyn(horizon_x0s, horizon_u_trajs)
-            all_x_pos = jnp.broadcast_to(horizon_x_trajs[None, :, :, :2], (n_agents, n_agents, mask_horizon, 2))
+            all_x_pos = jnp.broadcast_to(horizon_x_trajs[None, :, :, :2], (n_agents, n_agents, tsteps, 2))
             other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
-            mask_for_step = jnp.tile(masks[:, None, :], (1, mask_horizon, 1))
+            mask_for_step = jnp.tile(masks[:, None, :], (1, tsteps, 1))
             a_trajs, b_trajs = jit_batched_linearize_loss(horizon_x_trajs, horizon_u_trajs, horizon_ref_trajs, other_x_trajs, mask_for_step)
             v_trajs, _ = jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
             horizon_u_trajs += step_size * v_trajs
@@ -122,6 +132,11 @@ if __name__ == "__main__":
     init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size))
     init_ps = jnp.array([jnp.array([init_ps[i][0], init_ps[i][1], 0.0, 0.0]) for i in range(n_agents)])
     agents = [PointAgent(dt, x_dim=4, u_dim=2, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=control_weight, device=device) for _ in range(n_agents)]
+
+    # setup loss functions
+    for agent in agents:
+        agent.create_loss_function_mask()
+
     ref_trajs = jnp.array([jnp.linspace(init_ps[i][:2], goals[i], tsteps) for i in range(n_agents)])
     mask_horizon = config.game.T_receding_horizon_planning
     u_dim = 2
