@@ -143,9 +143,9 @@ if __name__ == "__main__":
     # create output directory
     gen_type = config.reference_generation.reference_gen_type
     if gen_type == "fixed":
-        output_dir = os.path.join("src/data", f"receding_horizon_trajectories_${n_agents}p")
+        output_dir = os.path.join("src/data", f"receding_horizon_trajectories_{n_agents}p")
     elif gen_type == "variable":
-        output_dir = os.path.join("src/data", f"receding_horizon_trajectories_upto_${n_agents}p")
+        output_dir = os.path.join("src/data", f"receding_horizon_trajectories_upto_{n_agents}p")
     else:
         raise ValueError(f"Invalid generation type: {gen_type}")
     
