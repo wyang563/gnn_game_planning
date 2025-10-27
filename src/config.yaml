@@ -27,7 +27,7 @@ optimization:
   
   # Cost function weights
   navigation_weight: 1.0    # Weight for navigation cost
-  collision_weight: 1.0    # Weight for collision avoidance
+  collision_weight: 2.0    # Weight for collision avoidance
   collision_scale: 1.0      # Scale factor in exponential collision cost
   control_weight: 0.1       # Weight for control cost
 
