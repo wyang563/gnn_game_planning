@@ -133,10 +133,14 @@ if __name__ == "__main__":
     # Extract parameters from configuration
     dt = config.game.dt
     tsteps = config.game.T_total
-    n_agents = config.game.N_agents
+    n_agents = config.game.N_agents  
     init_type = config.game.initiation_type
     mask_threshold = config.testing.receding_horizon.mask_threshold
     planning_horizon = config.game.T_receding_horizon_planning
+
+    # redefinitions
+    n_agents = 20
+    tsteps = 100
 
     # Optimization parameters
     num_iters = config.optimization.num_iters
@@ -166,7 +170,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.002_bs_32_sigma1_0.03_sigma2_0.03_epochs_50_mp_2/20251025_120535/psn_best_model.pkl"
+    model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.002_bs_32_sigma1_0.04_sigma2_0.04_epochs_50_mp_2_loss_type_similarity/20251028_103545/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
 
     # solve by horizon

@@ -155,13 +155,13 @@ class GNNSelectionNetwork(nn.Module):
         agent_features = []
         batch_size = x.shape[0]
         n_agents = x.shape[2]
+        
+        # Use simple GRU cell with manual scanning for compatibility
+        gru_cell = nn.GRUCell(features=self.gru_hidden_size, name=f'gru_shared')
 
         for agent_idx in range(n_agents):
             # Extract trajectory for this agent: (batch_size, T_observation, state_dim)
             agent_traj = x[:, :, agent_idx, :]
-            
-            # Use simple GRU cell with manual scanning for compatibility
-            gru_cell = nn.GRUCell(features=self.gru_hidden_size, name=f'gru_agent_{agent_idx}')
             
             # Initialize hidden state
             init_hidden = jnp.zeros((batch_size, self.gru_hidden_size))
@@ -218,6 +218,9 @@ class GNNSelectionNetwork(nn.Module):
     @nn.compact
     def __call__(self, x, rngs=None, deterministic=False):
         # assume input is (batch_size, T_observation, N_agents, input_dim)
+        # TODO: 
+        # 1. ego centric coordinates that are normalized
+        # 2. add closing speed, future projected trajectory etc. into node features
         # create graph
         graph_adj_matrix = self.create_graph_adj_matrix(x)
         node_encodings = self.encode_gru_features(x) # initial node encodings in the graph
@@ -288,6 +291,7 @@ def train_step(
     sigma1: float,
     sigma2: float,
     rng: jnp.ndarray = None,
+    loss_type: str = "similarity",
     obs_input_type: str = "full"
 ) -> Tuple[train_state.TrainState, jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
 
@@ -311,7 +315,12 @@ def train_step(
         total_loss = ego_cost_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
         return total_loss, (binary_loss_val, sparsity_loss_val, ego_cost_loss_val)
     
-    (loss, loss_components), grads = jax.value_and_grad(loss_fn_similarity, has_aux=True)(state.params)
+    if loss_type == "similarity":
+        (loss, loss_components), grads = jax.value_and_grad(loss_fn_similarity, has_aux=True)(state.params)
+    elif loss_type == "ego_agent_cost":
+        (loss, loss_components), grads = jax.value_and_grad(loss_fn_ego_cost, has_aux=True)(state.params)
+    else:
+        raise ValueError(f"loss type invalid: {loss_type}")
 
     # Apply gradient clipping to prevent gradient explosion
     grad_norm = jax.tree.reduce(lambda x, y: x + jnp.sum(jnp.square(y)), grads, initializer=0.0)
@@ -328,7 +337,7 @@ def train_step(
     return state, loss, loss_components
 
 def validation_step(state: train_state.TrainState, validation_data: List[Dict[str, Any]],
-                   batch_size: int = 32, ego_agent_id: int = 0, obs_input_type: str = "full") -> Tuple[float, float, float, float, List[jnp.ndarray]]:
+                   batch_size: int = 32, ego_agent_id: int = 0, obs_input_type: str = "full", loss_type: str = "similarity") -> Tuple[float, float, float, float, List[jnp.ndarray]]:
     """
     Perform validation on the validation dataset.
     
@@ -372,7 +381,12 @@ def validation_step(state: train_state.TrainState, validation_data: List[Dict[st
         sparsity_loss_val = mask_sparsity_loss(predicted_masks)
         
         # Compute similarity loss using game solving
-        similarity_loss_val = batch_similarity_loss(predicted_masks, predicted_goals, batch_data)
+        if loss_type == "similarity":
+            similarity_loss_val = batch_similarity_loss(predicted_masks, predicted_goals, batch_data)
+        elif loss_type == "ego_agent_cost":
+            similarity_loss_val = batch_ego_agent_cost(predicted_masks, predicted_goals, batch_data, obs_input_type=obs_input_type, apply_masks=False)
+        else:
+            raise ValueError(f"loss type invalid: {loss_type}")
         
         # Total validation loss (same as training loss for fair comparison)
         total_loss_val = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
@@ -400,12 +414,13 @@ def train_gnn(
     batch_size: int,
     obs_input_type: str,
     num_message_passing_rounds: int,
+    loss_type: str,
     rng: jnp.ndarray,
 ) -> Tuple[List[float], List[float], List[float], List[float], List[float], 
            List[float], List[float], List[float], train_state.TrainState, str, float, int]:
     
     # setup log directories
-    config_name = f"gnn_{obs_input_type}_planning_true_goals_maxN_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}_mp_{num_message_passing_rounds}"
+    config_name = f"gnn_{obs_input_type}_planning_true_goals_maxN_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}_mp_{num_message_passing_rounds}_loss_type_{loss_type}"
     model_log_dir = os.path.join("log", config_name)
     os.makedirs(model_log_dir, exist_ok=True)
     print(f"This GNN model type for training logs will be saved under: {model_log_dir}")
@@ -491,6 +506,7 @@ def train_gnn(
                 sigma1,
                 sigma2,
                 step_key,
+                loss_type,
                 obs_input_type
             )
 
@@ -521,7 +537,13 @@ def train_gnn(
 
         # validation step
         val_loss, val_binary_loss, val_sparsity_loss, val_similarity_loss, val_masks = validation_step(
-            state, validation_data_batches, batch_size, ego_agent_id=ego_agent_id, obs_input_type=obs_input_type)
+            state,
+            validation_data_batches,
+            batch_size,
+            ego_agent_id=ego_agent_id,
+            loss_type=loss_type,
+            obs_input_type=obs_input_type,
+        )
         validation_losses.append(val_loss)
         validation_binary_losses.append(val_binary_loss)
         validation_sparsity_losses.append(val_sparsity_loss)
@@ -634,6 +656,7 @@ if __name__ == "__main__":
     reference_dir = os.path.join("src/data", config.training.gnn_data_dir)
     print(f"Loading reference trajectories from directory: {reference_dir}")
     training_data, validation_data = load_reference_trajectories(reference_dir)
+    loss_type = config.gnn.loss_type
     
     print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
     
@@ -650,6 +673,7 @@ if __name__ == "__main__":
         batch_size=batch_size,
         rng=rng,
         obs_input_type=config.psn.obs_input_type,
+        loss_type=loss_type,
         num_message_passing_rounds=num_message_passing_rounds,
     )
 

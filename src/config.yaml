@@ -101,14 +101,17 @@ gnn:
   dropout_rate: 0.3
 
   # Loss function weights
-  sigma1: 0.03               # Weight for mask sparsity loss
-  sigma2: 0.03               # Weight for mask binary loss
+  sigma1: 0.04               # Weight for mask sparsity loss
+  sigma2: 0.04               # Weight for mask binary loss
 
   # graph edge creation parameters
   edge_metric: "fully_connected"
 
   # message passing rounds
-  num_message_passing_rounds: 0
+  num_message_passing_rounds: 3
+
+  # type of loss function to use (similarity vs ego agent cost)
+  loss_type: "similarity" # ["similarity", "ego_agent_cost"]
 
   # dimensions
   gru_hidden_size: 64

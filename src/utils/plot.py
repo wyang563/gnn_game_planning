@@ -87,7 +87,7 @@ def plot_trajs(trajs, goals, init_points, ax=None, title: Optional[str] = None,
 
 
 def plot_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_agent_id, 
-                   save_path, fps=10, figsize=(12, 10), xlim=(-3.5, 3.5), ylim=(-3.5, 3.5)):
+                   save_path, fps=10, figsize=(12, 10), xlim=None, ylim=None):
     """
     Create a GIF animation showing agent trajectories with mask-based highlighting.
     
@@ -101,8 +101,8 @@ def plot_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_ag
         save_path: str, path to save the GIF file
         fps: int, frames per second for the GIF (default: 10)
         figsize: tuple, figure size (default: (12, 10))
-        xlim: tuple, x-axis limits (default: (-3.5, 3.5))
-        ylim: tuple, y-axis limits (default: (-3.5, 3.5))
+        xlim: tuple, x-axis limits (default: None, auto-calculated from data)
+        ylim: tuple, y-axis limits (default: None, auto-calculated from data)
     """
     # Convert to numpy arrays
     trajectories = np.array(trajectories)
@@ -121,6 +121,35 @@ def plot_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_ag
     # Handle mask shape - convert to (n_timesteps, n_agents)
     if simulation_masks.shape[0] == n_agents and simulation_masks.shape[1] == n_timesteps:
         simulation_masks = simulation_masks.T
+    
+    # Auto-calculate axis limits if not provided
+    if xlim is None or ylim is None:
+        # Gather all x and y coordinates from trajectories, goals, and initial positions
+        all_x = np.concatenate([
+            positions[:, :, 0].flatten(),
+            goals[:, 0],
+            init_positions[:, 0]
+        ])
+        all_y = np.concatenate([
+            positions[:, :, 1].flatten(),
+            goals[:, 1],
+            init_positions[:, 1]
+        ])
+        
+        # Calculate min and max with padding (15% of the range)
+        x_min, x_max = all_x.min(), all_x.max()
+        y_min, y_max = all_y.min(), all_y.max()
+        
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        
+        x_padding = max(0.15 * x_range, 0.5)  # At least 0.5 units of padding
+        y_padding = max(0.15 * y_range, 0.5)
+        
+        if xlim is None:
+            xlim = (x_min - x_padding, x_max + x_padding)
+        if ylim is None:
+            ylim = (y_min - y_padding, y_max + y_padding)
     
     # Color scheme
     ego_color = 'darkblue'
