@@ -51,7 +51,7 @@ N_agents = config.game.N_agents
 ego_agent_id = config.game.ego_agent_id
 dt = config.game.dt
 T_total = config.game.T_total
-T_observation = config.psn.observation_length
+T_observation = config.game.T_observation
 T_reference = config.game.T_total
 state_dim = config.game.state_dim
 control_dim = config.game.control_dim
@@ -146,18 +146,19 @@ class GNNSelectionNetwork(nn.Module):
     """
     hidden_dims: List[int]
     gru_hidden_size: int = 64
+    gru_time_decay_factor: float = 0.8
     dropout_rate: float = 0.3
     obs_input_type: str = "full"    # "full" or "partial"
     deterministic: bool = False
     num_message_passing_rounds: int = num_message_passing_rounds
 
-    def encode_gru_features(self, x):
+    def gru_encoder_node_features(self, x):
         agent_features = []
         batch_size = x.shape[0]
         n_agents = x.shape[2]
         
         # Use simple GRU cell with manual scanning for compatibility
-        gru_cell = nn.GRUCell(features=self.gru_hidden_size, name=f'gru_shared')
+        node_encoder_gru_cell = nn.GRUCell(features=self.gru_hidden_size, name=f'node_gru_shared')
 
         for agent_idx in range(n_agents):
             # Extract trajectory for this agent: (batch_size, T_observation, state_dim)
@@ -169,7 +170,8 @@ class GNNSelectionNetwork(nn.Module):
             # Process sequence step by step
             hidden = init_hidden
             for t in range(T_observation):
-                hidden, _ = gru_cell(hidden, agent_traj[:, t, :])
+                discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
+                hidden, _ = node_encoder_gru_cell(hidden, discount_factor * agent_traj[:, t, :])
             
             # Use final hidden state as agent representation
             agent_features.append(hidden)
@@ -177,6 +179,52 @@ class GNNSelectionNetwork(nn.Module):
         # stack agent features 
         h_nodes = jnp.stack(agent_features, axis=1) # (B, N, gru_hidden_dim)
         return h_nodes
+    
+    # functions for calculating edge features
+    def gru_encoder_edge_features(self, batch_size, n_agents, x_traj_delta, gru_encoder):
+        edge_features = [[None for _ in range(n_agents)] for _ in range(n_agents)]
+        for agent_idx_i in range(n_agents):
+            for agent_idx_j in range(n_agents):
+                if agent_idx_i != agent_idx_j:
+                    agent_traj_delta = x_traj_delta[:, :, agent_idx_i, agent_idx_j, :]
+                    init_hidden = jnp.zeros((batch_size, self.gru_hidden_size))
+                    hidden = init_hidden
+                    for t in range(T_observation):
+                        discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
+                        hidden, _ = gru_encoder(hidden, discount_factor * agent_traj_delta[:, t, :])
+                    edge_features[agent_idx_i][agent_idx_j] = hidden
+        edge_features = jnp.array(edge_features)
+        return edge_features
+
+    def calculate_closing_speed(self, x_traj_delta):
+        dp = x_traj_delta[..., :2]
+        dv = x_traj_delta[..., 2:]
+        num = -jnp.sum(dp * dv, axis=-1)             
+        den = jnp.linalg.norm(dp, axis=-1) + 1e-5    
+        return num / den
+
+    def calculate_edge_features(self, x): 
+        # calculate pairwise differences between all agents for trajectories
+        batch_size = x.shape[0]
+        n_agents = x.shape[2]
+
+        x_i = x[:, :, :, None, :]  # (B, T, N, 1, input_dim)
+        x_j = x[:, :, None, :, :]  # (B, T, 1, N, input_dim)
+        x_traj_delta = x_j - x_i   # (B, T, N, N, input_dim)
+        x_traj_delta_last = x_traj_delta[:, -1, :, :, :] 
+
+        # define gru feature encoders
+        x_traj_delta_gru_encoder = nn.GRUCell(features=self.gru_hidden_size, name=f'edge_x_traj_delta_gru_shared')
+        closing_speeds_gru_encoder = nn.GRUCell(features=self.gru_hidden_size, name=f'edge_closing_speeds_gru_shared')
+
+        # encode edge features in time series
+        gru_encoded_x_delta_featuers = self.gru_encoder_edge_features(batch_size, n_agents, x_traj_delta, x_traj_delta_gru_encoder)
+        closing_speeds = self.calculate_closing_speed(x_traj_delta_last)
+        gru_encoded_closing_speeds = self.gru_encoder_edge_features(batch_size, n_agents, closing_speeds, closing_speeds_gru_encoder)
+
+        # concatenate all calculated edge features to get final edge encodings
+        edge_features = jnp.concatenate([gru_encoded_x_delta_featuers, gru_encoded_closing_speeds], axis=-1)
+        return edge_features
 
     def create_graph_adj_matrix(self, x):
         # TODO: this will be updated in the future to reflect usage of CBFs to select nearest neighbors
@@ -218,12 +266,9 @@ class GNNSelectionNetwork(nn.Module):
     @nn.compact
     def __call__(self, x, rngs=None, deterministic=False):
         # assume input is (batch_size, T_observation, N_agents, input_dim)
-        # TODO: 
-        # 1. ego centric coordinates that are normalized
-        # 2. add closing speed, future projected trajectory etc. into node features
-        # create graph
         graph_adj_matrix = self.create_graph_adj_matrix(x)
-        node_encodings = self.encode_gru_features(x) # initial node encodings in the graph
+        node_encodings = self.gru_encoder_node_features(x) # initial node encodings in the graph
+        edge_encodings = self.calculate_edge_features(x) # initial edge encodings in the graph
         message_mlp = MessageMLP(hidden_dims=message_mlp_dims, dropout_rate=dropout_rate)
 
         # message passing

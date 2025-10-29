@@ -113,8 +113,11 @@ gnn:
   # type of loss function to use (similarity vs ego agent cost)
   loss_type: "similarity" # ["similarity", "ego_agent_cost"]
 
+  # gru time delay discount factor
+  gru_discount_factor: 0.8
+
   # dimensions
-  gru_hidden_size: 64
+  gru_hidden_size: 32 
   message_mlp_dims: [128, 64]
   influence_head_dims: [128, 64]
 
