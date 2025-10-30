@@ -144,7 +144,6 @@ class GNNSelectionNetwork(nn.Module):
     """
     GNN Selection Network for selecting important agents.
     """
-    hidden_dims: List[int]
     gru_hidden_size: int = 64
     gru_time_decay_factor: float = 0.8
     dropout_rate: float = 0.3
@@ -153,47 +152,65 @@ class GNNSelectionNetwork(nn.Module):
     num_message_passing_rounds: int = num_message_passing_rounds
 
     def gru_encoder_node_features(self, x):
-        agent_features = []
         batch_size = x.shape[0]
         n_agents = x.shape[2]
         
         # Use simple GRU cell with manual scanning for compatibility
         node_encoder_gru_cell = nn.GRUCell(features=self.gru_hidden_size, name=f'node_gru_shared')
 
-        for agent_idx in range(n_agents):
-            # Extract trajectory for this agent: (batch_size, T_observation, state_dim)
-            agent_traj = x[:, :, agent_idx, :]
-            
-            # Initialize hidden state
-            init_hidden = jnp.zeros((batch_size, self.gru_hidden_size))
-            
-            # Process sequence step by step
-            hidden = init_hidden
-            for t in range(T_observation):
-                discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
-                hidden, _ = node_encoder_gru_cell(hidden, discount_factor * agent_traj[:, t, :])
-            
-            # Use final hidden state as agent representation
-            agent_features.append(hidden)
+        # Transpose from (batch_size, T_observation, n_agents, state_dim) to (batch_size, n_agents, T_observation, state_dim)
+        x_reordered = jnp.transpose(x, (0, 2, 1, 3))
+        # Reshape to (batch_size * n_agents, T_observation, state_dim)
+        x_flat = x_reordered.reshape(batch_size * n_agents, T_observation, -1)
         
-        # stack agent features 
-        h_nodes = jnp.stack(agent_features, axis=1) # (B, N, gru_hidden_dim)
+        # Initialize hidden state for all agents: (batch_size * n_agents, gru_hidden_size)
+        hidden = jnp.zeros((batch_size * n_agents, self.gru_hidden_size))
+        
+        # Process all time steps sequentially, but all agents in parallel
+        for t in range(T_observation):
+            discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
+            hidden, _ = node_encoder_gru_cell(hidden, discount_factor * x_flat[:, t, :])
+        
+        # Reshape back to (batch_size, n_agents, gru_hidden_size)
+        h_nodes = hidden.reshape(batch_size, n_agents, self.gru_hidden_size)
         return h_nodes
     
     # functions for calculating edge features
     def gru_encoder_edge_features(self, batch_size, n_agents, x_traj_delta, gru_encoder):
-        edge_features = [[None for _ in range(n_agents)] for _ in range(n_agents)]
-        for agent_idx_i in range(n_agents):
-            for agent_idx_j in range(n_agents):
-                if agent_idx_i != agent_idx_j:
-                    agent_traj_delta = x_traj_delta[:, :, agent_idx_i, agent_idx_j, :]
-                    init_hidden = jnp.zeros((batch_size, self.gru_hidden_size))
-                    hidden = init_hidden
-                    for t in range(T_observation):
-                        discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
-                        hidden, _ = gru_encoder(hidden, discount_factor * agent_traj_delta[:, t, :])
-                    edge_features[agent_idx_i][agent_idx_j] = hidden
-        edge_features = jnp.array(edge_features)
+        """
+        Compute edge features in parallel for all agent pairs.
+        x_traj_delta: (batch_size, T_observation, n_agents, n_agents, feature_dim)
+        Returns: (n_agents, n_agents, batch_size, gru_hidden_size)
+        """
+        
+        # Reshape to process all edges in parallel
+        # From (batch_size, T_observation, n_agents, n_agents, feature_dim)
+        # To (batch_size, n_agents, n_agents, T_observation, feature_dim)
+        x_reordered = jnp.transpose(x_traj_delta, (0, 2, 3, 1, 4))
+        
+        # Flatten to (batch_size * n_agents * n_agents, T_observation, feature_dim)
+        feature_dim = x_traj_delta.shape[-1]
+        x_flat = x_reordered.reshape(batch_size * n_agents * n_agents, T_observation, feature_dim)
+        
+        # Initialize hidden state for all edges: (batch_size * n_agents * n_agents, gru_hidden_size)
+        hidden = jnp.zeros((batch_size * n_agents * n_agents, self.gru_hidden_size))
+        
+        # Process all time steps sequentially, but all edges in parallel
+        for t in range(T_observation):
+            discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
+            hidden, _ = gru_encoder(hidden, discount_factor * x_flat[:, t, :])
+        
+        # Reshape back to (batch_size, n_agents, n_agents, gru_hidden_size)
+        edge_features = hidden.reshape(batch_size, n_agents, n_agents, self.gru_hidden_size)
+        
+        # Transpose to (n_agents, n_agents, batch_size, gru_hidden_size) to match expected output
+        edge_features = jnp.transpose(edge_features, (1, 2, 0, 3))
+        
+        # Create mask for diagonal elements (i == j) and zero them out
+        mask = jnp.eye(n_agents, dtype=bool)
+        mask = mask[:, :, None, None]  # (n_agents, n_agents, 1, 1)
+        edge_features = jnp.where(mask, 0.0, edge_features)
+        
         return edge_features
 
     def calculate_closing_speed(self, x_traj_delta):
@@ -201,7 +218,8 @@ class GNNSelectionNetwork(nn.Module):
         dv = x_traj_delta[..., 2:]
         num = -jnp.sum(dp * dv, axis=-1)             
         den = jnp.linalg.norm(dp, axis=-1) + 1e-5    
-        return num / den
+        closing_speeds = num / den
+        return closing_speeds[..., None] # add extra dimension to match x_traj_delta overall shape
 
     def calculate_edge_features(self, x): 
         # calculate pairwise differences between all agents for trajectories
@@ -211,7 +229,6 @@ class GNNSelectionNetwork(nn.Module):
         x_i = x[:, :, :, None, :]  # (B, T, N, 1, input_dim)
         x_j = x[:, :, None, :, :]  # (B, T, 1, N, input_dim)
         x_traj_delta = x_j - x_i   # (B, T, N, N, input_dim)
-        x_traj_delta_last = x_traj_delta[:, -1, :, :, :] 
 
         # define gru feature encoders
         x_traj_delta_gru_encoder = nn.GRUCell(features=self.gru_hidden_size, name=f'edge_x_traj_delta_gru_shared')
@@ -219,7 +236,7 @@ class GNNSelectionNetwork(nn.Module):
 
         # encode edge features in time series
         gru_encoded_x_delta_featuers = self.gru_encoder_edge_features(batch_size, n_agents, x_traj_delta, x_traj_delta_gru_encoder)
-        closing_speeds = self.calculate_closing_speed(x_traj_delta_last)
+        closing_speeds = self.calculate_closing_speed(x_traj_delta)
         gru_encoded_closing_speeds = self.gru_encoder_edge_features(batch_size, n_agents, closing_speeds, closing_speeds_gru_encoder)
 
         # concatenate all calculated edge features to get final edge encodings
@@ -237,7 +254,7 @@ class GNNSelectionNetwork(nn.Module):
         
         return graph_adj_matrix
     
-    def message_pass(self, node_encodings, graph_adj_matrix, message_mlp, deterministic=False):
+    def message_pass(self, node_encodings, edge_encodings, graph_adj_matrix, message_mlp, deterministic=False):
         n_agents = graph_adj_matrix.shape[1]
         # message pass between edges
         nodes_i = jnp.tile(node_encodings[:, :, None, :], (1, 1, n_agents, 1))
@@ -273,7 +290,7 @@ class GNNSelectionNetwork(nn.Module):
 
         # message passing
         for _ in range(self.num_message_passing_rounds):
-            node_encodings = self.message_pass(node_encodings, graph_adj_matrix, message_mlp, deterministic)
+            node_encodings = self.message_pass(node_encodings, edge_encodings, graph_adj_matrix, message_mlp, deterministic)
         
         # get mask values corresponding to each edge from influence head
         influence_head = InfluenceHead(hidden_dims=influence_head_dims, dropout_rate=dropout_rate)
@@ -686,8 +703,8 @@ if __name__ == "__main__":
 
     # Initialize the model
     gnn_model = GNNSelectionNetwork(
-        hidden_dims=message_mlp_dims, 
         gru_hidden_size=gru_hidden_size, 
+        gru_time_decay_factor=config.gnn.gru_discount_factor,
         dropout_rate=dropout_rate, 
         obs_input_type="full", 
         deterministic=True, 
@@ -696,31 +713,44 @@ if __name__ == "__main__":
     
     # Create dummy input data
     rng = jax.random.PRNGKey(config.training.seed)
+    # Test GNNSelectionNetwork with a dummy batch to check calculate_edge_features
+    batch_size = 2
+    T_obs = T_observation
+    N = 20
+    input_dim = state_dim
 
-    # Load reference trajectories
-    reference_dir = os.path.join("src/data", config.training.gnn_data_dir)
-    print(f"Loading reference trajectories from directory: {reference_dir}")
-    training_data, validation_data = load_reference_trajectories(reference_dir)
-    loss_type = config.gnn.loss_type
+    dummy_batch = jax.random.normal(rng, (batch_size, T_obs, N, input_dim))
+
+    # Forward through model, capture outputs
+    output = gnn_model.apply({'params': gnn_model.init(rng, dummy_batch)['params']}, dummy_batch, rngs={'dropout': rng}, deterministic=True)
+    print("GNN model forward pass succeeded.")
+    print("Output shape:", output.shape)
+
+
+    # # Load reference trajectories
+    # reference_dir = os.path.join("src/data", config.training.gnn_data_dir)
+    # print(f"Loading reference trajectories from directory: {reference_dir}")
+    # training_data, validation_data = load_reference_trajectories(reference_dir)
+    # loss_type = config.gnn.loss_type
     
-    print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
+    # print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
     
-    training_losses, validation_losses, binary_losses, sparsity_losses, \
-    ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
-    validation_ego_agent_costs, trained_state, log_dir, best_loss, best_epoch = train_gnn(
-        gnn_model,
-        training_data,
-        validation_data,
-        num_epochs=num_epochs,
-        learning_rate=learning_rate,
-        sigma1=sigma1,
-        sigma2=sigma2,
-        batch_size=batch_size,
-        rng=rng,
-        obs_input_type=config.psn.obs_input_type,
-        loss_type=loss_type,
-        num_message_passing_rounds=num_message_passing_rounds,
-    )
+    # training_losses, validation_losses, binary_losses, sparsity_losses, \
+    # ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
+    # validation_ego_agent_costs, trained_state, log_dir, best_loss, best_epoch = train_gnn(
+    #     gnn_model,
+    #     training_data,
+    #     validation_data,
+    #     num_epochs=num_epochs,
+    #     learning_rate=learning_rate,
+    #     sigma1=sigma1,
+    #     sigma2=sigma2,
+    #     batch_size=batch_size,
+    #     rng=rng,
+    #     obs_input_type=config.psn.obs_input_type,
+    #     loss_type=loss_type,
+    #     num_message_passing_rounds=num_message_passing_rounds,
+    # )
 
 
 
