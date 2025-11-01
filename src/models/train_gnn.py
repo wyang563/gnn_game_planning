@@ -143,6 +143,7 @@ class InfluenceHead(nn.Module):
 class GNNSelectionNetwork(nn.Module):
     """
     GNN Selection Network for selecting important agents.
+    TODO: instead of having node features as past_x_trajs, have them be future x_trajs over the next ten timesteps
     """
     gru_hidden_size: int = 64
     gru_time_decay_factor: float = 0.8
@@ -168,7 +169,8 @@ class GNNSelectionNetwork(nn.Module):
         
         # Process all time steps sequentially, but all agents in parallel
         for t in range(T_observation):
-            discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
+            # discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
+            discount_factor = 1.0
             hidden, _ = node_encoder_gru_cell(hidden, discount_factor * x_flat[:, t, :])
         
         # Reshape back to (batch_size, n_agents, gru_hidden_size)
@@ -197,20 +199,23 @@ class GNNSelectionNetwork(nn.Module):
         
         # Process all time steps sequentially, but all edges in parallel
         for t in range(T_observation):
-            discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
+            # discount_factor = self.gru_time_decay_factor ** (T_observation - 1 - t)
+            discount_factor = 1.0
             hidden, _ = gru_encoder(hidden, discount_factor * x_flat[:, t, :])
         
         # Reshape back to (batch_size, n_agents, n_agents, gru_hidden_size)
         edge_features = hidden.reshape(batch_size, n_agents, n_agents, self.gru_hidden_size)
         
-        # Transpose to (n_agents, n_agents, batch_size, gru_hidden_size) to match expected output
+        # Transpose to (n_agents, n_agents, batch_size, gru_hidden_size) to perform mask operation 
         edge_features = jnp.transpose(edge_features, (1, 2, 0, 3))
         
         # Create mask for diagonal elements (i == j) and zero them out
         mask = jnp.eye(n_agents, dtype=bool)
         mask = mask[:, :, None, None]  # (n_agents, n_agents, 1, 1)
         edge_features = jnp.where(mask, 0.0, edge_features)
-        
+
+        # retranspose back to (batch_size, n_agents, n_agents, gru_hidden_size)
+        edge_features = jnp.transpose(edge_features, (2, 0, 1, 3))
         return edge_features
 
     def calculate_closing_speed(self, x_traj_delta):
@@ -256,10 +261,11 @@ class GNNSelectionNetwork(nn.Module):
     
     def message_pass(self, node_encodings, edge_encodings, graph_adj_matrix, message_mlp, deterministic=False):
         n_agents = graph_adj_matrix.shape[1]
+
         # message pass between edges
         nodes_i = jnp.tile(node_encodings[:, :, None, :], (1, 1, n_agents, 1))
         nodes_j = jnp.tile(node_encodings[:, None, :, :], (1, n_agents, 1, 1))
-        pair_encodings = jnp.concatenate([nodes_i, nodes_j], axis=-1)
+        pair_encodings = jnp.concatenate([nodes_i, nodes_j, edge_encodings], axis=-1)
 
         # edge MLP
         messages = message_mlp(pair_encodings, deterministic=deterministic)  # (B, N, N, message_dim)
@@ -280,8 +286,51 @@ class GNNSelectionNetwork(nn.Module):
         node_encodings = node_encodings + aggregated_messages
         return node_encodings
 
+    def predict_future_trajectory(self, x):
+        T_obs = x.shape[1]
+        
+        # Extract last known state (most recent observation)
+        last_positions = x[:, -1, :, :2]  
+        last_velocities = x[:, -1, :, 2:] 
+        
+        # Estimate acceleration using finite differences from recent velocity changes
+        if T_obs >= 2:
+            velocity_diff = x[:, -1, :, 2:] - x[:, -2, :, 2:]  
+            acceleration = velocity_diff / dt  
+        else:
+            acceleration = jnp.zeros_like(last_velocities)
+        
+        # Predict future trajectories using constant acceleration model
+        # Kinematic equations:
+        #   p(t) = p0 + v0*t + 0.5*a*t^2
+        #   v(t) = v0 + a*t
+        
+        future_trajectories = []
+        
+        for t_future in range(1, T_obs + 1):
+            # Time from last observation
+            delta_t = t_future * dt
+            
+            # Position: p(t) = p0 + v0*t + 0.5*a*t^2
+            future_positions = (last_positions + last_velocities * delta_t + 0.5 * acceleration * (delta_t ** 2))
+            
+            # Velocity: v(t) = v0 + a*t
+            future_velocities = last_velocities + acceleration * delta_t
+            
+            # Concatenate position and velocity
+            future_state = jnp.concatenate([future_positions, future_velocities], axis=-1)
+            future_trajectories.append(future_state)
+        
+        # Stack along time dimension: (batch_size, T_observation, N_agents, 4)
+        predicted_trajectories = jnp.stack(future_trajectories, axis=1)
+        
+        return predicted_trajectories
+
     @nn.compact
     def __call__(self, x, rngs=None, deterministic=False):
+        # predict future trajectory over 10 time steps
+        x = self.predict_future_trajectory(x)
+
         # assume input is (batch_size, T_observation, N_agents, input_dim)
         graph_adj_matrix = self.create_graph_adj_matrix(x)
         node_encodings = self.gru_encoder_node_features(x) # initial node encodings in the graph
@@ -299,8 +348,12 @@ class GNNSelectionNetwork(nn.Module):
         ego_encoding = node_encodings[:, ego_agent_id, :]  # (B, hidden_dim)
         transposed_graph_adj_matrix = jnp.transpose(graph_adj_matrix, (0, 2, 1))
         batch_ego_incoming_edge_indices = transposed_graph_adj_matrix[:, ego_agent_id, :] == 1.0
+        
+        # setup input to influence head
         ego_encoding_repeated = jnp.tile(ego_encoding[:, None, :], (1, node_encodings.shape[1], 1))
-        influence_head_inputs = jnp.concatenate([node_encodings, ego_encoding_repeated], axis=-1)
+        incoming_edge_encodings = edge_encodings[:, :, ego_agent_id, :]
+
+        influence_head_inputs = jnp.concatenate([node_encodings, ego_encoding_repeated, incoming_edge_encodings], axis=-1)
         influence_outputs = influence_head(influence_head_inputs, deterministic=deterministic)
         influence_outputs = jnp.squeeze(influence_outputs, axis=-1)
 
@@ -319,7 +372,7 @@ def load_trained_gnn_models(gnn_model_path: Optional[str], obs_input_type: str =
         print(f"Loading trained GNNSelectionNetwork model from: {gnn_model_path}")
         with open(gnn_model_path, "rb") as f:
             gnn_model_bytes = pickle.load(f)
-        gnn_model = GNNSelectionNetwork(hidden_dims=message_mlp_dims, gru_hidden_size=gru_hidden_size, dropout_rate=dropout_rate, obs_input_type=obs_input_type)
+        gnn_model = GNNSelectionNetwork(gru_hidden_size=gru_hidden_size, gru_time_decay_factor=config.gnn.gru_discount_factor, dropout_rate=dropout_rate, obs_input_type=obs_input_type)
         gnn_trained_state = flax.serialization.from_bytes(gnn_model, gnn_model_bytes)
         print("✓ GNNSelectionNetwork model loaded successfully")
     else:
@@ -713,44 +766,39 @@ if __name__ == "__main__":
     
     # Create dummy input data
     rng = jax.random.PRNGKey(config.training.seed)
-    # Test GNNSelectionNetwork with a dummy batch to check calculate_edge_features
-    batch_size = 2
-    T_obs = T_observation
-    N = 20
-    input_dim = state_dim
 
-    dummy_batch = jax.random.normal(rng, (batch_size, T_obs, N, input_dim))
+    dummy_batch = jax.random.normal(rng, (batch_size, T_observation, N_agents, 4))
 
     # Forward through model, capture outputs
     output = gnn_model.apply({'params': gnn_model.init(rng, dummy_batch)['params']}, dummy_batch, rngs={'dropout': rng}, deterministic=True)
-    print("GNN model forward pass succeeded.")
+    print("GNN model test forward pass succeeded.")
     print("Output shape:", output.shape)
 
 
-    # # Load reference trajectories
-    # reference_dir = os.path.join("src/data", config.training.gnn_data_dir)
-    # print(f"Loading reference trajectories from directory: {reference_dir}")
-    # training_data, validation_data = load_reference_trajectories(reference_dir)
-    # loss_type = config.gnn.loss_type
+    # Load reference trajectories
+    reference_dir = os.path.join("src/data", config.training.gnn_data_dir)
+    print(f"Loading reference trajectories from directory: {reference_dir}")
+    training_data, validation_data = load_reference_trajectories(reference_dir)
+    loss_type = config.gnn.loss_type
     
-    # print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
+    print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
     
-    # training_losses, validation_losses, binary_losses, sparsity_losses, \
-    # ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
-    # validation_ego_agent_costs, trained_state, log_dir, best_loss, best_epoch = train_gnn(
-    #     gnn_model,
-    #     training_data,
-    #     validation_data,
-    #     num_epochs=num_epochs,
-    #     learning_rate=learning_rate,
-    #     sigma1=sigma1,
-    #     sigma2=sigma2,
-    #     batch_size=batch_size,
-    #     rng=rng,
-    #     obs_input_type=config.psn.obs_input_type,
-    #     loss_type=loss_type,
-    #     num_message_passing_rounds=num_message_passing_rounds,
-    # )
+    training_losses, validation_losses, binary_losses, sparsity_losses, \
+    ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
+    validation_ego_agent_costs, trained_state, log_dir, best_loss, best_epoch = train_gnn(
+        gnn_model,
+        training_data,
+        validation_data,
+        num_epochs=num_epochs,
+        learning_rate=learning_rate,
+        sigma1=sigma1,
+        sigma2=sigma2,
+        batch_size=batch_size,
+        rng=rng,
+        obs_input_type=config.psn.obs_input_type,
+        loss_type=loss_type,
+        num_message_passing_rounds=num_message_passing_rounds,
+    )
 
 
 

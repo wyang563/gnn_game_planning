@@ -139,7 +139,7 @@ if __name__ == "__main__":
     planning_horizon = config.game.T_receding_horizon_planning
 
     # redefinitions
-    n_agents = 20
+    n_agents = 25
     tsteps = 100
 
     # Optimization parameters
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.002_bs_32_sigma1_0.04_sigma2_0.04_epochs_50_mp_2_loss_type_similarity/20251028_103545/psn_best_model.pkl"
+    model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.03_sigma2_0.03_epochs_50_mp_3_loss_type_similarity/20251030_125343/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
 
     # solve by horizon
