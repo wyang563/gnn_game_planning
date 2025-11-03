@@ -138,10 +138,6 @@ if __name__ == "__main__":
     mask_threshold = config.testing.receding_horizon.mask_threshold
     planning_horizon = config.game.T_receding_horizon_planning
 
-    # redefinitions
-    n_agents = 25
-    tsteps = 100
-
     # Optimization parameters
     num_iters = config.optimization.num_iters
     step_size = config.optimization.step_size
@@ -151,8 +147,15 @@ if __name__ == "__main__":
     Q = jnp.diag(jnp.array(config.optimization.Q))
     R = jnp.diag(jnp.array(config.optimization.R))
 
+
+    # redefinitions of game parameters to make stuff more robust
+    n_agents = 50
+    tsteps = 100
+    num_iters = 100
+    collision_weight = 10.0
+
     # genera random inits
-    boundary_size = 3.5
+    boundary_size = 20.0
     init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size))
     init_ps = jnp.array([jnp.array([init_ps[i][0], init_ps[i][1], 0.0, 0.0]) for i in range(n_agents)])
     agents = [PointAgent(dt, x_dim=4, u_dim=2, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=control_weight, device=device) for _ in range(n_agents)]
@@ -170,7 +173,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.03_sigma2_0.03_epochs_50_mp_3_loss_type_similarity/20251030_125343/psn_best_model.pkl"
+    model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.1_sigma2_0.1_epochs_50_mp_2_loss_type_ego_agent_cost/20251103_010337/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
 
     # solve by horizon

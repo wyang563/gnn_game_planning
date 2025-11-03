@@ -143,7 +143,6 @@ class InfluenceHead(nn.Module):
 class GNNSelectionNetwork(nn.Module):
     """
     GNN Selection Network for selecting important agents.
-    TODO: instead of having node features as past_x_trajs, have them be future x_trajs over the next ten timesteps
     """
     gru_hidden_size: int = 64
     gru_time_decay_factor: float = 0.8
@@ -151,6 +150,7 @@ class GNNSelectionNetwork(nn.Module):
     obs_input_type: str = "full"    # "full" or "partial"
     deterministic: bool = False
     num_message_passing_rounds: int = num_message_passing_rounds
+    edge_metric: str = "full" # "random" or "cbf"
 
     def gru_encoder_node_features(self, x):
         batch_size = x.shape[0]
@@ -326,9 +326,24 @@ class GNNSelectionNetwork(nn.Module):
         
         return predicted_trajectories
 
+    def normalize_trajectories(self, x):
+        # shape (B, T, N, 2)
+        positions = x[..., :2]
+        velocities = x[..., 2:]
+        
+        # center positions
+        mean_position = jnp.mean(positions, axis=(1,2))  # shape: (B, 2)
+        positions = positions - mean_position[:, None, None, :]
+
+        # normalize positions
+        max_radius = jnp.max(jnp.linalg.norm(positions, axis=-1), axis=(1,2))  # shape: (B, 2)
+        positions = positions / max_radius[:, None, None, :]
+        velocities = velocities / max_radius[:, None, None, :]
+        return jnp.concatenate([positions, velocities], axis=-1)
+
     @nn.compact
     def __call__(self, x, rngs=None, deterministic=False):
-        # predict future trajectory over 10 time steps
+        x = self.normalize_trajectories(x)
         x = self.predict_future_trajectory(x)
 
         # assume input is (batch_size, T_observation, N_agents, input_dim)
@@ -372,7 +387,7 @@ def load_trained_gnn_models(gnn_model_path: Optional[str], obs_input_type: str =
         print(f"Loading trained GNNSelectionNetwork model from: {gnn_model_path}")
         with open(gnn_model_path, "rb") as f:
             gnn_model_bytes = pickle.load(f)
-        gnn_model = GNNSelectionNetwork(gru_hidden_size=gru_hidden_size, gru_time_decay_factor=config.gnn.gru_discount_factor, dropout_rate=dropout_rate, obs_input_type=obs_input_type)
+        gnn_model = GNNSelectionNetwork(gru_hidden_size=gru_hidden_size, gru_time_decay_factor=config.gnn.gru_discount_factor, dropout_rate=dropout_rate, obs_input_type=obs_input_type, edge_metric=edge_metric)
         gnn_trained_state = flax.serialization.from_bytes(gnn_model, gnn_model_bytes)
         print("✓ GNNSelectionNetwork model loaded successfully")
     else:
@@ -761,7 +776,8 @@ if __name__ == "__main__":
         dropout_rate=dropout_rate, 
         obs_input_type="full", 
         deterministic=True, 
-        num_message_passing_rounds=num_message_passing_rounds
+        num_message_passing_rounds=num_message_passing_rounds,
+        edge_metric=edge_metric,
     )
     
     # Create dummy input data
