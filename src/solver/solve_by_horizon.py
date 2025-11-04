@@ -25,6 +25,7 @@ from models.train_gnn import GNNSelectionNetwork, load_trained_gnn_models
 from models.train_mlp import PlayerSelectionNetwork, load_trained_psn_models
 from tqdm import tqdm
 from utils.plot import plot_trajs, plot_agent_gif
+from eval.baselines import nearest_neighbors, jacobian, cost_evolution, barrier_function
 
 def solve_by_horizon(
     agents: list[PointAgent],
@@ -88,15 +89,26 @@ def solve_by_horizon(
         batch_past_x_trajs = past_x_trajs[None, ...]
         
         # calculate ego masks based off model player selection type
-        if model_type in ["mlp", "gnn"]:
-            ego_masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
-            ego_masks = ego_masks[0]
-            if model_type == "mlp":
-                final_masks_mlp = jnp.zeros((n_agents))
-                ego_masks = final_masks_mlp.at[1:].set(ego_masks)
-        elif model_type == "all":
-            ego_masks = jnp.ones((n_agents))
-            ego_masks = ego_masks.at[0].set(0.0)
+        match model_type:
+            case "mlp" | "gnn":
+                ego_masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
+                ego_masks = ego_masks[0]
+                if model_type == "mlp":
+                    final_masks_mlp = jnp.zeros((n_agents))
+                    ego_masks = final_masks_mlp.at[1:].set(ego_masks)
+            case "nearest_neighbors":
+                ego_masks = nearest_neighbors(past_x_trajs, k=3)
+            case "jacobian":
+                ego_masks = jacobian(past_x_trajs, k=3)
+            case "cost_evolution":
+                ego_masks = cost_evolution(past_x_trajs, k=3)
+            case "barrier_function":
+                ego_masks = barrier_function(past_x_trajs, k=3)
+            case "all":
+                ego_masks = jnp.ones((n_agents))
+                ego_masks = ego_masks.at[0].set(0.0)
+            case _:
+                raise ValueError(f"Invalid model type: {model_type}")
 
         # threshold ego masks
         ego_masks = jnp.where(ego_masks > mask_threshold, 1.0, 0.0)
@@ -147,8 +159,7 @@ if __name__ == "__main__":
     Q = jnp.diag(jnp.array(config.optimization.Q))
     R = jnp.diag(jnp.array(config.optimization.R))
 
-
-    # redefinitions of game parameters to make stuff more robust
+    # redefinitions of game parameters to test adapatbility of model 
     n_agents = 50
     tsteps = 100
     num_iters = 100
@@ -173,8 +184,12 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.1_sigma2_0.1_epochs_50_mp_2_loss_type_ego_agent_cost/20251103_010337/psn_best_model.pkl"
+    model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.0005_bs_32_sigma1_0.5_sigma2_0.5_epochs_50_mp_2_loss_type_ego_agent_cost/20251103_215406/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
+
+    model_type = "barrier_function"
+    model = None
+    model_state = None
 
     # solve by horizon
     final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(

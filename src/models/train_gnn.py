@@ -336,9 +336,12 @@ class GNNSelectionNetwork(nn.Module):
         positions = positions - mean_position[:, None, None, :]
 
         # normalize positions
-        max_radius = jnp.max(jnp.linalg.norm(positions, axis=-1), axis=(1,2))  # shape: (B, 2)
-        positions = positions / max_radius[:, None, None, :]
-        velocities = velocities / max_radius[:, None, None, :]
+        # Per-batch maximum radius (scalar per batch)
+        max_radius = jnp.max(jnp.linalg.norm(positions, axis=-1), axis=(1,2))  # shape: (B,)
+        # Avoid division by zero and broadcast over (T, N, 2)
+        scale = jnp.maximum(max_radius, 1e-8)[:, None, None, None]
+        positions = positions / scale
+        velocities = velocities / scale
         return jnp.concatenate([positions, velocities], axis=-1)
 
     @nn.compact

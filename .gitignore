@@ -14,6 +14,7 @@ receding_horizon_trajectories_*
 reference_trajectories_*
 checkpoints
 results
+eval_data_*
 
 # cache files
 *.egg-info

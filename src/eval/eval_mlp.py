@@ -35,7 +35,7 @@ from load_config import load_config, get_device_config, setup_jax_config
 from models.train_mlp import PlayerSelectionNetwork, load_trained_psn_models 
 
 # Import baselines
-from models.baselines import baseline_selection
+from eval.old_baselines import baseline_selection
 
 # ============================================================================
 # LOAD CONFIGURATION AND SETUP
