@@ -65,6 +65,7 @@ sigma1 = config.gnn.sigma1
 sigma2 = config.gnn.sigma2  
 num_message_passing_rounds = config.gnn.num_message_passing_rounds
 edge_metric = config.gnn.edge_metric
+edge_metric_top_k = config.gnn.top_k
 dropout_rate = config.gnn.dropout_rate
 
 gru_hidden_size = config.gnn.gru_hidden_size
@@ -152,7 +153,7 @@ class GNNSelectionNetwork(nn.Module):
     deterministic: bool = False
     num_message_passing_rounds: int = num_message_passing_rounds
     edge_metric: str = "full" # "random" or "cbf"
-    edge_metric_top_k: int = 5
+    edge_metric_top_k: int = 10
 
     def gru_encoder_node_features(self, x):
         batch_size = x.shape[0]
@@ -584,18 +585,25 @@ def train_gnn(
     num_message_passing_rounds: int,
     loss_type: str,
     rng: jnp.ndarray,
+    edge_metric: str,
+    edge_metric_top_k: int,
 ) -> Tuple[List[float], List[float], List[float], List[float], List[float], 
            List[float], List[float], List[float], train_state.TrainState, str, float, int]:
     
     # setup log directories
-    config_name = f"gnn_{obs_input_type}_planning_true_goals_maxN_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}_mp_{num_message_passing_rounds}_loss_type_{loss_type}"
-    model_log_dir = os.path.join("log", config_name)
+    model_config_name = f"gnn_{obs_input_type}_MP_{num_message_passing_rounds}_edge_metric_{edge_metric}_top_k_{edge_metric_top_k}"
+    train_config_name = f"train_n_agents_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}_loss_type_{loss_type}"
+    
+    # create train log setup
+    model_log_dir = os.path.join("log", model_config_name)
+    train_log_dir = os.path.join("log", model_config_name, train_config_name)
     os.makedirs(model_log_dir, exist_ok=True)
-    print(f"This GNN model type for training logs will be saved under: {model_log_dir}")
+    os.makedirs(train_log_dir, exist_ok=True)
+    print(f"This GNN model type for training logs will be saved under: {train_log_dir}")
 
     # write data to specific run log directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_log_dir = os.path.join(model_log_dir, timestamp)
+    run_log_dir = os.path.join(train_log_dir, timestamp)
     os.makedirs(run_log_dir, exist_ok=True)
 
     # Initialize TensorBoard writer
@@ -816,6 +824,7 @@ if __name__ == "__main__":
         deterministic=True, 
         num_message_passing_rounds=num_message_passing_rounds,
         edge_metric=edge_metric,
+        edge_metric_top_k=edge_metric_top_k
     )
     
     # Create dummy input data
@@ -852,6 +861,8 @@ if __name__ == "__main__":
         obs_input_type=config.psn.obs_input_type,
         loss_type=loss_type,
         num_message_passing_rounds=num_message_passing_rounds,
+        edge_metric=edge_metric,
+        edge_metric_top_k=edge_metric_top_k
     )
 
 

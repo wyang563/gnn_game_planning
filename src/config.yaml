@@ -105,8 +105,8 @@ gnn:
   sigma2: 0.035               # Weight for mask binary loss
 
   # graph edge creation parameters
-  edge_metric: "full"
-  top_k: 5 # number of top values to consider
+  edge_metric: "full" # ["full", "nearest_neighbors", "jacobian", "barrier_function"]
+  edge_metric_top_k: 10 # number of top values to consider
 
   # message passing rounds
   num_message_passing_rounds: 2
