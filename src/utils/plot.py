@@ -1,8 +1,9 @@
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import numpy as np
-from typing import Optional
+from typing import Optional, Union
 from PIL import Image
+import jax.numpy as jnp
 
 
 def plot_trajs(trajs, goals, init_points, ax=None, title: Optional[str] = None, 
@@ -263,4 +264,177 @@ def plot_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_ag
         loop=0
     )
     print(f"✓ GIF created successfully!")
+
+
+def plot_past_and_predicted_trajectories(x_trajs, dt: float, model=None, 
+                                         ax=None, title: Optional[str] = None,
+                                         show_legend: bool = True, 
+                                         save_path: Optional[str] = None):
+    """
+    Plot past trajectories along with predicted future trajectories from GNNSelectionNetwork.
+    
+    This function is designed to test the predict_future_trajectory method of GNNSelectionNetwork.
+    It plots:
+    - Past trajectories (solid lines) from x_trajs
+    - Predicted future trajectories (dashed lines) computed using predict_future_trajectory
+    
+    Args:
+        x_trajs: Past trajectory data
+            - Shape (T_observation, N_agents, 4) for single trajectory
+            - Shape (batch_size, T_observation, N_agents, 4) for batch (only first item plotted)
+            Contains states [x, y, vx, vy] for each agent at each timestep
+        dt: Time step size (delta time) used for trajectory prediction
+        model: Optional GNNSelectionNetwork model instance. If provided, uses model.predict_future_trajectory.
+               If None, implements the prediction logic directly.
+        ax: Optional matplotlib axis to plot on. If None, creates a new figure
+        title: Optional title for the plot
+        show_legend: Whether to show the legend (default: True)
+        save_path: Optional file path to save the plot. If provided, saves the figure
+    
+    Returns:
+        fig, ax: matplotlib figure and axis objects
+    """
+    # Convert to numpy/jax array if needed
+    if isinstance(x_trajs, np.ndarray):
+        x_trajs_jax = jnp.array(x_trajs)
+    else:
+        x_trajs_jax = x_trajs
+    
+    # Handle batch dimension - if batch, take first item
+    if len(x_trajs_jax.shape) == 4:  # (batch_size, T_obs, N_agents, 4)
+        x_trajs_jax = x_trajs_jax[0]  # Take first batch item
+    
+    # Ensure shape is (T_observation, N_agents, 4)
+    x_trajs_jax = jnp.atleast_3d(x_trajs_jax)
+    if x_trajs_jax.shape[-1] != 4:
+        raise ValueError(f"Expected last dimension to be 4 (x, y, vx, vy), got {x_trajs_jax.shape[-1]}")
+    
+    # Add batch dimension for prediction: (1, T_obs, N_agents, 4)
+    x_trajs_batch = jnp.expand_dims(x_trajs_jax, axis=0)
+    
+    # Predict future trajectories
+    if model is not None:
+        # Use model's predict_future_trajectory method
+        predicted_trajs_batch = model.predict_future_trajectory(x_trajs_batch)
+    else:
+        # Implement prediction logic directly (same as in GNNSelectionNetwork)
+        T_obs = x_trajs_batch.shape[1]
+        
+        # Extract last known state (most recent observation)
+        last_positions = x_trajs_batch[:, -1, :, :2]  # (batch, N_agents, 2)
+        last_velocities = x_trajs_batch[:, -1, :, 2:]  # (batch, N_agents, 2)
+        
+        # Estimate acceleration using finite differences from recent velocity changes
+        if T_obs >= 2:
+            velocity_diff = x_trajs_batch[:, -1, :, 2:] - x_trajs_batch[:, -2, :, 2:]
+            acceleration = velocity_diff / dt
+        else:
+            acceleration = jnp.zeros_like(last_velocities)
+        
+        # Predict future trajectories using constant acceleration model
+        future_trajectories = []
+        
+        for t_future in range(1, T_obs + 1):
+            # Time from last observation
+            delta_t = t_future * dt
+            
+            # Position: p(t) = p0 + v0*t + 0.5*a*t^2
+            future_positions = (last_positions + last_velocities * delta_t + 
+                               0.5 * acceleration * (delta_t ** 2))
+            
+            # Velocity: v(t) = v0 + a*t
+            future_velocities = last_velocities + acceleration * delta_t
+            
+            # Concatenate position and velocity
+            future_state = jnp.concatenate([future_positions, future_velocities], axis=-1)
+            future_trajectories.append(future_state)
+        
+        # Stack along time dimension: (batch_size, T_observation, N_agents, 4)
+        predicted_trajs_batch = jnp.stack(future_trajectories, axis=1)
+    
+    # Remove batch dimension and convert to numpy
+    predicted_trajs = np.array(predicted_trajs_batch[0])  # (T_obs, N_agents, 4)
+    past_trajs = np.array(x_trajs_jax)  # (T_obs, N_agents, 4)
+    
+    # Extract position data (first 2 columns)
+    past_positions = past_trajs[:, :, :2]  # (T_obs, N_agents, 2)
+    predicted_positions = predicted_trajs[:, :, :2]  # (T_obs, N_agents, 2)
+    
+    # Create figure if not provided
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(10, 8))
+    else:
+        fig = ax.get_figure()
+    
+    T_obs, n_agents, _ = past_positions.shape
+    
+    # Get colors for each agent using tab10 colormap
+    colors = plt.cm.tab10(np.linspace(0, 1, n_agents))
+    
+    # Plot past trajectories (solid lines)
+    for i in range(n_agents):
+        color = colors[i]
+        ax.plot(past_positions[:, i, 0], past_positions[:, i, 1],
+                color=color, linewidth=2.5, alpha=0.8, linestyle='-',
+                label=f'Agent {i} (Past)', zorder=3)
+    
+    # Plot predicted future trajectories (dashed lines)
+    # Connect past to future at the transition point
+    for i in range(n_agents):
+        color = colors[i]
+        # Get the last past position
+        last_past_pos = past_positions[-1, i, :]
+        # Get the first predicted position
+        first_pred_pos = predicted_positions[0, i, :]
+        
+        # Plot predicted trajectory (dashed)
+        ax.plot(predicted_positions[:, i, 0], predicted_positions[:, i, 1],
+                color=color, linewidth=2.5, alpha=0.6, linestyle='--',
+                label=f'Agent {i} (Predicted)', zorder=2)
+        
+        # Draw a connecting line from past to future (thin, lighter)
+        ax.plot([last_past_pos[0], first_pred_pos[0]], 
+                [last_past_pos[1], first_pred_pos[1]],
+                color=color, linewidth=1, alpha=0.4, linestyle=':', zorder=1)
+    
+    # Mark the transition point (where past ends and future begins)
+    for i in range(n_agents):
+        color = colors[i]
+        transition_pos = past_positions[-1, i, :]
+        ax.scatter(transition_pos[0], transition_pos[1],
+                  color=color, s=100, marker='o', edgecolors='black',
+                  linewidth=2, zorder=5, label=f'Transition (Agent {i})' if i == 0 else '')
+    
+    # Set plot properties
+    ax.set_xlabel('X Position (m)', fontsize=12)
+    ax.set_ylabel('Y Position (m)', fontsize=12)
+    
+    if title:
+        ax.set_title(title, fontsize=14, fontweight='bold')
+    else:
+        ax.set_title(f'Past vs Predicted Future Trajectories (N={n_agents})', 
+                    fontsize=14, fontweight='bold')
+    
+    if show_legend:
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=9)
+    
+    ax.grid(True, alpha=0.3)
+    ax.set_aspect('equal', adjustable='box')
+    
+    # Add text annotation to clarify the plot
+    ax.text(0.02, 0.98, 'Solid: Past trajectories\nDashed: Predicted future',
+           transform=ax.transAxes, fontsize=10, verticalalignment='top',
+           bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to: {save_path}")
+    
+    # Only close if we created the figure (ax was None)
+    if ax is None:
+        plt.close()
+    
+    return fig, ax
 

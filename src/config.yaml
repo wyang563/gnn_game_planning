@@ -6,7 +6,7 @@ game:
   T_observation: 10         # Number of steps to observe before solving the game
 
   # Agent configuration
-  N_agents: 10             # Total number of agents in the game
+  N_agents: 20             # Total number of agents in the game
   ego_agent_id: 0           # ID of the ego agent (usually 0)
   
   # State and control dimensions
@@ -22,12 +22,12 @@ game:
 
 optimization:
   # iLQGames solver parameters
-  num_iters: 50            # Number of iterations for iLQGames solver  
+  num_iters: 100            # Number of iterations for iLQGames solver  
   step_size: 0.005          # Step size for gradient descent
   
   # Cost function weights
   navigation_weight: 1.0    # Weight for navigation cost
-  collision_weight: 2.0    # Weight for collision avoidance
+  collision_weight: 20.0    # Weight for collision avoidance
   collision_scale: 1.0      # Scale factor in exponential collision cost
   control_weight: 0.1       # Weight for control cost
 
@@ -36,7 +36,7 @@ optimization:
   R: [0.01, 0.01]
 
 reference_generation:
-  num_samples: 1000
+  num_samples: 2000
   reference_gen_type: "variable" # ["fixed", "variable"] where variable is number of agents is random up to n_agents
   save_dir_fixed: "reference_trajectories_${N_agents}p"
   save_dir_variable: "reference_trajectories_upto_${N_agents}p"
@@ -106,6 +106,7 @@ gnn:
 
   # graph edge creation parameters
   edge_metric: "full"
+  top_k: 5 # number of top values to consider
 
   # message passing rounds
   num_message_passing_rounds: 2

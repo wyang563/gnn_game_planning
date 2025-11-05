@@ -40,6 +40,7 @@ sys.path.insert(0, parent_dir)
 from load_config import load_config
 from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training_gnn, extract_true_goals_from_batch, sort_by_n_agents, organize_batches
 from models.loss_funcs import binary_loss, mask_sparsity_loss, batch_similarity_loss, batch_ego_agent_cost
+from models.policies import barrier_function_top_k, jacobian_top_k, nearest_neighbors_top_k 
 
 # ============================================================================
 # GLOBAL PARAMETERS
@@ -151,6 +152,7 @@ class GNNSelectionNetwork(nn.Module):
     deterministic: bool = False
     num_message_passing_rounds: int = num_message_passing_rounds
     edge_metric: str = "full" # "random" or "cbf"
+    edge_metric_top_k: int = 5
 
     def gru_encoder_node_features(self, x):
         batch_size = x.shape[0]
@@ -249,14 +251,47 @@ class GNNSelectionNetwork(nn.Module):
         return edge_features
 
     def create_graph_adj_matrix(self, x):
-        # TODO: this will be updated in the future to reflect usage of CBFs to select nearest neighbors
         n_agents = x.shape[2]
         batch_size = x.shape[0]
         
-        # Create a random graph adj matrix for each sample in the batch
-        graph_adj_matrix = jax.random.randint(jax.random.PRNGKey(42), (batch_size, n_agents, n_agents), 0, 2)
+        # blank graph adj matrix to start
+        graph_adj_matrix = jnp.zeros((batch_size, n_agents, n_agents))
         graph_adj_matrix = graph_adj_matrix.astype(jnp.float32)
-        
+
+        if self.edge_metric == "full":
+            graph_adj_matrix = jnp.ones((batch_size, n_agents, n_agents))
+            identity_matrix = jnp.eye(n_agents)
+            graph_adj_matrix = graph_adj_matrix - identity_matrix[None, :, :]
+
+        elif self.edge_metric == "nearest_neighbors":
+            x_transposed = jnp.transpose(x, (0, 2, 1, 3))  # (batch_size, n_agents, T, state_dim)
+            batched_nearest_neighbors = jax.vmap(
+                lambda x_single: nearest_neighbors_top_k(x_single, top_k=self.edge_metric_top_k),
+                in_axes=0  # vmap over the first axis (batch dimension)
+            )
+            graph_adj_matrix = batched_nearest_neighbors(x_transposed)
+
+        elif self.edge_metric == "jacobian":
+            x_transposed = jnp.transpose(x, (0, 2, 1, 3))  # (batch_size, n_agents, T, state_dim)
+            batched_jacobian = jax.vmap(
+                lambda x_single: jacobian_top_k(x_single, top_k=self.edge_metric_top_k, dt=dt, w1=1.0, w2=0.5),
+                in_axes=0  # vmap over the first axis (batch dimension)
+            )
+            graph_adj_matrix = batched_jacobian(x_transposed)
+
+        elif self.edge_metric == "barrier_function":
+            x_transposed = jnp.transpose(x, (0, 2, 1, 3))  # (batch_size, n_agents, T, state_dim)
+            
+            # Use vmap to apply barrier_function_top_k over the batch dimension
+            batched_barrier_function = jax.vmap(
+                lambda x_single: barrier_function_top_k(x_single, top_k=self.edge_metric_top_k, R=0.5, kappa=5.0),
+                in_axes=0  # vmap over the first axis (batch dimension)
+            )
+            graph_adj_matrix = batched_barrier_function(x_transposed)
+
+        # transpose matrix so masked edges become incoming edges
+        graph_adj_matrix = jnp.transpose(graph_adj_matrix, (0, 2, 1))
+        graph_adj_matrix = graph_adj_matrix.astype(jnp.float32)
         return graph_adj_matrix
     
     def message_pass(self, node_encodings, edge_encodings, graph_adj_matrix, message_mlp, deterministic=False):

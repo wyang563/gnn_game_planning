@@ -1,31 +1,101 @@
-# Core ML/DL libraries
-torch>=2.0.0
-torch-geometric>=2.3.0
-numpy>=1.24.0
-pandas>=2.0.0
-scikit-learn>=1.3.0
-jax>=0.3.27
-jaxlib>=0.3.27
-cvxpy>=1.3.0
-optax>=0.2.0
-# equinox>=0.11.0
-flax>=0.7.0
-jaxtyping>=0.2.20
-tensorflow>=2.12.0
-tensorflow-datasets>=4.9.0
+# ==============================================================================
+# Unified Requirements for GNN Game Planning + MMD
+# ==============================================================================
+# This file combines dependencies from:
+# - gnn_game_planning/requirements.txt
+# - mmd/requirements.txt and its deps subdirectories
+#
+# Note: PyTorch with CUDA support should be installed via conda as per README
 
-# Data processing and visualization
-matplotlib>=3.7.0
-seaborn>=0.12.0
-plotly>=5.15.0
-zarr>=3.0.0
+# Core Deep Learning Libraries
+# -----------------------------------------------------------------------------
+torch>=2.0.0,<2.5.0  # Main DL framework (install with conda for CUDA support)
+torchvision>=0.15.0,<0.20.0  # For vision tasks
+torchaudio>=2.0.0,<2.5.0  # For audio tasks
+torch-geometric>=2.3.0,<2.6.0  # For GNN operations
+torchdiffeq>=0.2.3,<1.0.0  # For differential equations with PyTorch
+torch-summary>=1.4.5,<2.0.0  # For model summaries
+tensorflow>=2.12.0,<2.18.0  # Additional DL framework
+tensorflow-datasets>=4.9.0,<4.10.0  # TF datasets
+tensorboard>=2.12.0,<2.18.0  # For visualization and logging
 
-# Configuration and utilities
-pyyaml>=6.0
-tqdm>=4.65.0
-wandb>=0.15.0  # for experiment tracking
+# JAX Ecosystem
+# -----------------------------------------------------------------------------
+# Note: For CUDA support, install with: pip install "jax[cuda11_local]" or "jax[cuda12_local]"
+# For CUDA 11.5-11.8: use jax[cuda11_local] (backward compatible with CUDA 11.5+)
+# For CUDA 12.x: use jax[cuda12_local]
+# Check your CUDA version with: nvcc --version
+jax>=0.4.20,<0.5.0  # Google's JAX library (0.4.20+ compatible with Flax 0.7+)
+jaxlib>=0.4.20,<0.5.0  # JAX library support (install CUDA version separately)
+optax>=0.2.0,<0.3.0  # Gradient processing and optimization
+flax>=0.7.5,<0.9.0  # Neural network library for JAX (0.7.5+ uses new JAX API)
+jaxtyping>=0.2.20,<0.3.0  # Type annotations for JAX
 
-# Development tools
-pytest>=7.4.0
-black>=23.0.0
-flake8>=6.0.0
+# Scientific Computing & Optimization
+# -----------------------------------------------------------------------------
+numpy>=1.24.0,<2.0.0  # Numerical computing
+scipy>=1.10.0,<2.0.0  # Scientific computing
+cvxpy>=1.3.0,<2.0.0  # Convex optimization
+cholespy~=2.0.0  # Sparse Cholesky decomposition
+
+# Data Processing & Management
+# -----------------------------------------------------------------------------
+pandas>=2.0.0,<3.0.0  # Data manipulation
+scikit-learn>=1.3.0,<2.0.0  # Machine learning utilities
+zarr>=2.10.0,<3.0.0  # Chunked, compressed, N-dimensional arrays (3.x requires Python 3.11+)
+joblib>=1.3.0,<2.0.0  # Lightweight pipelining
+networkx~=2.2  # Network analysis (version flexible for torch-geometric and urdfpy compatibility)
+
+# Visualization
+# -----------------------------------------------------------------------------
+matplotlib>=3.7.0,<4.0.0  # Plotting library
+seaborn>=0.12.0,<1.0.0  # Statistical visualization
+plotly>=5.15.0,<6.0.0  # Interactive plots
+tabulate>=0.9.0,<1.0.0  # Pretty-print tabular data
+
+# Computer Vision & Graphics
+# -----------------------------------------------------------------------------
+opencv-python~=4.10.0.84  # Computer vision
+pillow>=10.0.0,<11.0.0  # Image processing
+trimesh>=3.23.0,<5.0.0  # Triangular mesh processing
+mesh_to_sdf>=0.0.14,<1.0.0  # Mesh to signed distance field conversion (versions are 0.0.x)
+scikit-video>=1.1.0,<2.0.0  # Video processing
+moviepy>=1.0.3,<2.0.0  # Video editing
+pygame>=2.5.0,<3.0.0  # Game development and visualization
+
+# 3D & Robotics
+# -----------------------------------------------------------------------------
+shapely>=2.0.0,<3.0.0  # Geometric operations
+urdfpy>=0.0.22  # URDF parser for robotics (0.0.24+ supports newer networkx)
+urdf-parser-py>=0.0.4,<1.0.0  # Alternative URDF parser
+
+# NLP & Embeddings
+# -----------------------------------------------------------------------------
+sentence_transformers>=2.2.0,<3.0.0  # Sentence embeddings
+
+# Configuration & CLI
+# -----------------------------------------------------------------------------
+pyyaml>=6.0,<7.0.0  # YAML parsing
+ConfigArgParse>=1.5.0,<2.0.0  # Command line argument parsing
+hydra-core>=1.3.0,<2.0.0  # Configuration management
+
+# Utilities
+# -----------------------------------------------------------------------------
+tqdm>=4.65.0,<5.0.0  # Progress bars
+einops~=0.6.1  # Tensor operations
+gdown>=4.7.0,<5.0.0  # Google Drive downloader
+gitpython>=3.1.0,<4.0.0  # Git integration
+setuptools~=70.2.0  # Package installation
+future>=0.18.0,<1.0.0  # Python 2/3 compatibility (required by keras-ncp, ncps)
+oauthlib>=3.0.0,<4.0.0  # OAuth implementation (required by requests-oauthlib)
+lqrax>=0.0.6  # LQR solver for optimal control
+
+# Experiment Tracking & Logging
+# -----------------------------------------------------------------------------
+wandb>=0.15.0,<0.16.0  # Weights & Biases for experiment tracking
+
+# Development Tools
+# -----------------------------------------------------------------------------
+pytest>=7.4.0,<9.0.0  # Testing framework
+black>=23.0.0,<25.0.0  # Code formatting
+flake8>=6.0.0,<8.0.0  # Linting

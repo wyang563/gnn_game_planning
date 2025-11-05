@@ -57,6 +57,8 @@ def generate_reference_trajectories(**kwargs):
                 else:
                     selection_pool.extend([i] * 3)
             n_agents = random.choice(selection_pool)
+            # recalibrate boundary size based on number of agents
+            boundary_size = n_agents**(0.7)  * 1.75
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
             create_loss_functions(agents, "no_mask")
         else:

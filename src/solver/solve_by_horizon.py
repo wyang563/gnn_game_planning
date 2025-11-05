@@ -41,7 +41,8 @@ def solve_by_horizon(
     model: nn.Module,
     model_state: Any,
     model_type: str,
-    device: Any
+    device: Any,
+    mask_mag: float = 3,
 ) -> None:
     n_agents = len(agents)
 
@@ -97,13 +98,13 @@ def solve_by_horizon(
                     final_masks_mlp = jnp.zeros((n_agents))
                     ego_masks = final_masks_mlp.at[1:].set(ego_masks)
             case "nearest_neighbors":
-                ego_masks = nearest_neighbors(past_x_trajs, k=3)
+                ego_masks = nearest_neighbors(past_x_trajs, k=mask_mag)
             case "jacobian":
-                ego_masks = jacobian(past_x_trajs, k=3)
+                ego_masks = jacobian(past_x_trajs, k=mask_mag)
             case "cost_evolution":
-                ego_masks = cost_evolution(past_x_trajs, k=3)
+                ego_masks = cost_evolution(past_x_trajs, k=mask_mag)
             case "barrier_function":
-                ego_masks = barrier_function(past_x_trajs, k=3)
+                ego_masks = barrier_function(past_x_trajs, k=mask_mag)
             case "all":
                 ego_masks = jnp.ones((n_agents))
                 ego_masks = ego_masks.at[0].set(0.0)
@@ -160,13 +161,13 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # redefinitions of game parameters to test adapatbility of model 
-    n_agents = 50
+    n_agents = 10
     tsteps = 100
     num_iters = 100
     collision_weight = 10.0
 
     # genera random inits
-    boundary_size = 20.0
+    boundary_size = 3.5
     init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size))
     init_ps = jnp.array([jnp.array([init_ps[i][0], init_ps[i][1], 0.0, 0.0]) for i in range(n_agents)])
     agents = [PointAgent(dt, x_dim=4, u_dim=2, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=control_weight, device=device) for _ in range(n_agents)]
@@ -178,6 +179,7 @@ if __name__ == "__main__":
     ref_trajs = jnp.array([jnp.linspace(init_ps[i][:2], goals[i], tsteps) for i in range(n_agents)])
     mask_horizon = config.game.T_observation
     u_dim = 2
+    mask_mag = None # default definition of mask magnitude
 
     # model_type = "mlp"
     # model_path = "log/psn_gru_full_planning_true_goals_N_10_T_50_obs_10_lr_0.002_bs_64_sigma1_0.075_sigma2_0.075_epochs_50/20251023_001904/psn_best_model.pkl"
@@ -187,9 +189,10 @@ if __name__ == "__main__":
     model_path = "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.0005_bs_32_sigma1_0.5_sigma2_0.5_epochs_50_mp_2_loss_type_ego_agent_cost/20251103_215406/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
 
-    model_type = "barrier_function"
-    model = None
-    model_state = None
+    # model_type = "jacobian"
+    # mask_mag = 5
+    # model = None
+    # model_state = None
 
     # solve by horizon
     final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(
@@ -206,7 +209,8 @@ if __name__ == "__main__":
         model=model,
         model_state=model_state,
         model_type=model_type,
-        device=device
+        device=device,
+        mask_mag=mask_mag,
     )
     plot_trajs(final_x_trajs, goals, init_ps, save_path="src/solver/test.png")
     plot_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, "src/solver/test.gif")

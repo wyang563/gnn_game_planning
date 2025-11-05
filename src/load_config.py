@@ -135,12 +135,20 @@ def get_device_config():
     # Determine device based on configuration
     preferred = config.get('device.preferred_device', 'auto')
     
-    if preferred == 'gpu' and jax.devices('gpu'):
-        device = jax.devices('gpu')[0]
+    # Check if GPU is available (handle gracefully if not)
+    try:
+        gpu_devices = jax.devices('gpu')
+        has_gpu = len(gpu_devices) > 0
+    except RuntimeError:
+        has_gpu = False
+        gpu_devices = []
+    
+    if preferred == 'gpu' and has_gpu:
+        device = gpu_devices[0]
     elif preferred == 'cpu':
         device = jax.devices('cpu')[0]
     else:  # auto
-        device = jax.devices('gpu')[0] if jax.devices('gpu') else jax.devices('cpu')[0]
+        device = gpu_devices[0] if has_gpu else jax.devices('cpu')[0]
     
     return device
 

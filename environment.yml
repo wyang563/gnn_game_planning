@@ -1,0 +1,11 @@
+name: gnn_game_planning
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - patchelf
+  # Note: pip dependencies should be installed separately after environment creation
+  # to avoid conflicts during conda env create. See setup instructions.
+

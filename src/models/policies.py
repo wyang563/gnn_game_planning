@@ -71,6 +71,47 @@ def nearest_neighbors_radius(past_x_trajs: jnp.ndarray, critical_radius: float) 
     within_radius_mask = jnp.where(mask_diag, False, within_radius_mask)
     return within_radius_mask.astype(jnp.int32)
 
+def barrier_function_top_k(
+    past_x_trajs: jnp.ndarray,
+    top_k: int,
+    R: float = 0.5,
+    kappa: float = 5.0,
+) -> jnp.ndarray:
+    N = past_x_trajs.shape[0]
+    
+    # Extract positions and velocities at the last time step
+    positions = past_x_trajs[:, -1, :2]  # Shape: (N, 2)
+    velocities = past_x_trajs[:, -1, 2:4]  # Shape: (N, 2)
+    
+    # Calculate pairwise position differences: pos[i] - pos[j]
+    pos_diff = positions[:, None, :] - positions[None, :, :]  # Shape: (N, N, 2)
+    
+    # Calculate pairwise velocity differences: vel[i] - vel[j]
+    vel_diff = velocities[:, None, :] - velocities[None, :, :]  # Shape: (N, N, 2)
+    
+    # Barrier function: h = ||p_diff||^2 - R^2
+    h = jnp.sum(pos_diff**2, axis=-1) - R**2  # Shape: (N, N)
+    
+    # Derivative: h_dot = 2 * (p_diff^T * v_diff)
+    h_dot = 2 * jnp.sum(pos_diff * vel_diff, axis=-1)  # Shape: (N, N)
+    
+    # Control barrier function condition: h_dot + kappa * h
+    # Lower values are more dangerous
+    bf_values = h_dot + kappa * h  # Shape: (N, N)
+    
+    # Mask diagonal (agent with itself) with large values so it won't be selected
+    bf_values = jnp.where(jnp.eye(N, dtype=bool), jnp.inf, bf_values)
+    
+    # Get indices of top-k smallest barrier values for each agent (most dangerous)
+    dangerous_indices = jnp.argsort(bf_values, axis=1)[:, :top_k]
+    
+    # Convert indices to mask format
+    mask = jnp.zeros((N, N), dtype=jnp.int32)
+    row_indices = jnp.arange(N)[:, None]  # Shape: [N, 1]
+    mask = mask.at[row_indices, dangerous_indices].set(1)
+    
+    return mask
+
 if __name__ == "__main__":
     # Test case for jacobian function
     # Create example past_x_trajs array with 3 agents, 5 time steps, 4 states each
@@ -84,7 +125,7 @@ if __name__ == "__main__":
     ])
     
     # Test parameters
-    top_k = 2
+    top_k = 1
     dt = 0.1
     w1 = 1.0
     w2 = 0.5
@@ -110,6 +151,12 @@ if __name__ == "__main__":
     radius_mask = nearest_neighbors_radius(past_x_trajs, 1.5)
     print(f"Mask shape: {radius_mask.shape}")
     print(f"Mask:\n{radius_mask}")
+    
+    # Test barrier_function_top_k
+    print(f"\n4. Barrier function top-k (k={top_k}):")
+    barrier_mask = barrier_function_top_k(past_x_trajs, top_k, R=0.5, kappa=5.0)
+    print(f"Mask shape: {barrier_mask.shape}")
+    print(f"Mask:\n{barrier_mask}")
     
     # Print final positions for reference
     final_positions = past_x_trajs[:, -1, :2]
