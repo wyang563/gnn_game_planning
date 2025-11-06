@@ -261,6 +261,7 @@ def eval_model(
                     device=device,
                     collision_weight=collision_weight,
                     collision_scale=collision_scale,
+                    disable_tqdm=True,
                 )
                 
                 # Compute metrics

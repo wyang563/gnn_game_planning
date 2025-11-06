@@ -47,6 +47,7 @@ def solve_by_horizon(
     use_only_ego_masks: bool = True,
     collision_weight: float = 2.0,
     collision_scale: float = 1.0,
+    disable_tqdm: bool = False,
 ) -> None:
     n_agents = len(agents)
 
@@ -60,7 +61,7 @@ def solve_by_horizon(
     # logging data
     simulation_masks = []
 
-    for iter in tqdm(range(tsteps + 1)):
+    for iter in tqdm(range(tsteps + 1), disable=disable_tqdm):
         # setup horizon arrays
         x_trajs, _, _ = jit_batched_linearize_dyn(init_states, control_trajs)
         horizon_x0s = x_trajs[:, iter]
@@ -97,6 +98,7 @@ def solve_by_horizon(
         match model_type:
             case "mlp" | "gnn":
                 masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
+                masks = jnp.squeeze(masks, axis=0) # squeeze batch dimension
                 if model_type == "mlp":
                     # Transform (n_agents, n_agents-1) mask to (n_agents, n_agents) with 0 at row i, col i since MLP only returns n_agents - 1 sized masks
                     padded_masks = []
@@ -125,6 +127,7 @@ def solve_by_horizon(
         # assumes ego agent_id is 0
         simulation_masks.append(masks[0])
 
+        # condition for if we want all other agents to consider every other agent
         if use_only_ego_masks:
             ego_masks = masks[0]
             masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
@@ -173,8 +176,8 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # redefinitions of game parameters to test adapatbility of model 
-    n_agents = 50
-    tsteps = 100
+    n_agents = 25
+    tsteps = 200 
     num_iters = 100
     collision_weight = 5.0
 
@@ -200,7 +203,7 @@ if __name__ == "__main__":
     model_type = "gnn"
     model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.05_sigma2_0.05_epochs_50_loss_type_similarity/20251105_222438/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
-    use_only_ego_masks = False
+    use_only_ego_masks = False 
 
     # model_type = "jacobian"
     # mask_mag = 5

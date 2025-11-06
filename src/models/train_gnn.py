@@ -395,28 +395,38 @@ class GNNSelectionNetwork(nn.Module):
         node_encodings = self.gru_encoder_node_features(x) # initial node encodings in the graph
         edge_encodings = self.calculate_edge_features(x) # initial edge encodings in the graph
         message_mlp = MessageMLP(hidden_dims=message_mlp_dims, dropout_rate=dropout_rate)
-
-        # message passing
+        
         for _ in range(self.num_message_passing_rounds):
             node_encodings = self.message_pass(node_encodings, edge_encodings, graph_adj_matrix, message_mlp, deterministic)
         
         # get mask values corresponding to each edge from influence head
         influence_head = InfluenceHead(hidden_dims=influence_head_dims, dropout_rate=dropout_rate)
 
-        # Use the ego agent's encoding to generate the mask
-        ego_encoding = node_encodings[:, ego_agent_id, :]  # (B, hidden_dim)
-        transposed_graph_adj_matrix = jnp.transpose(graph_adj_matrix, (0, 2, 1))
-        batch_ego_incoming_edge_indices = transposed_graph_adj_matrix[:, ego_agent_id, :] == 1.0
+        # generate masks for all agents in parallel
+        N_agents = node_encodings.shape[1]
         
-        # setup input to influence head
-        ego_encoding_repeated = jnp.tile(ego_encoding[:, None, :], (1, node_encodings.shape[1], 1))
-        incoming_edge_encodings = edge_encodings[:, :, ego_agent_id, :]
-
-        influence_head_inputs = jnp.concatenate([node_encodings, ego_encoding_repeated, incoming_edge_encodings], axis=-1)
+        # Create ego encodings for all agents at once: (B, N_agents, N_agents, hidden_dim)
+        ego_encoding_repeated = jnp.tile(node_encodings[:, :, None, :], (1, 1, N_agents, 1))
+        
+        # Expand node_encodings to match: (B, N_agents, N_agents, hidden_dim)
+        node_encodings_expanded = jnp.tile(node_encodings[:, None, :, :], (1, N_agents, 1, 1))
+        
+        # Transpose edge_encodings to get incoming edges: (B, N_agents, N_agents, edge_dim)
+        incoming_edge_encodings = jnp.transpose(edge_encodings, (0, 2, 1, 3))
+        
+        # Concatenate all inputs: (B, N_agents, N_agents, hidden_dim + hidden_dim + edge_dim)
+        influence_head_inputs = jnp.concatenate([node_encodings_expanded, ego_encoding_repeated, incoming_edge_encodings], axis=-1)
+        
+        # Process all (batch, ego_agent, other_agent) combinations in parallel
+        # nn.Dense treats all dimensions except the last as batch dimensions
         influence_outputs = influence_head(influence_head_inputs, deterministic=deterministic)
-        influence_outputs = jnp.squeeze(influence_outputs, axis=-1)
-
-        # zero out influence outputs for non-incoming edges
+        influence_outputs = jnp.squeeze(influence_outputs, axis=-1)  # (B, N_agents, N_agents)
+        
+        # Create mask for incoming edges: (B, N_agents, N_agents)
+        transposed_graph_adj_matrix = jnp.transpose(graph_adj_matrix, (0, 2, 1))
+        batch_ego_incoming_edge_indices = transposed_graph_adj_matrix == 1.0
+        
+        # Apply masking to zero out non-incoming edges
         output_masks = jnp.where(batch_ego_incoming_edge_indices, influence_outputs, 0.0)
         return output_masks
 
