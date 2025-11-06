@@ -6,7 +6,7 @@ from typing import List, Dict, Tuple, Any, Optional
 from load_config import load_config, get_device_config
 from solver.point_agent import PointAgent
 from data.ref_traj_data_loading import prepare_batch_for_training
-from solver.solve_differentiable import solve_masked_game_differentiable
+from solver.solve_differentiable import solve_masked_game_differentiable, solve_masked_game_differentiable_parallel
 from data.ref_traj_data_loading import extract_observation_trajectory 
 
 # ============================================================================
@@ -116,20 +116,29 @@ def compute_similarity_loss_from_arrays(agents: list,
     """Fully-JAX similarity loss using arrays only (no Python dict access).
     - initial_states: (N_agents, 4)
     - predicted_goals_row: (N_agents * 2,) or (N_agents, 2)
-    - predicted_mask_row: (N_agents - 1,)
+    - predicted_mask_row: (N_agents,)
     - ref_ego_traj: (T_reference, state_dim)
     """
     targets = predicted_goals_row.reshape(n_agents, 2)
     mask_values = predicted_mask_row
 
     # Use the new differentiable game solver directly
-    state_trajectories, _ = solve_masked_game_differentiable(
+
+    state_trajectories, _ = solve_masked_game_differentiable_parallel(
         agents,
         [initial_states[i] for i in range(n_agents)],
         targets,
         mask_values,
         num_iters=num_iters,
     )
+
+    # state_trajectories, _ = solve_masked_game_differentiable(
+    #     agents,
+    #     [initial_states[i] for i in range(n_agents)],
+    #     targets,
+    #     mask_values,
+    #     num_iters=num_iters,
+    # )
 
     ego_traj_masked = state_trajectories[0]
     return similarity_loss(ego_traj_masked, ref_ego_traj)
@@ -151,6 +160,11 @@ def batch_similarity_loss(predicted_masks: jnp.ndarray, predicted_goals: jnp.nda
         ) 
         for _ in range(n_agents)
     ]
+
+    # initialize loss functions
+    for agent in shared_agents:
+        agent.create_loss_function_mask()
+
     observations, ref_trajs = prepare_batch_for_training(batch_data, obs_input_type)
 
     def per_sample(i):
@@ -352,9 +366,18 @@ def compute_ego_agent_cost_from_arrays(agents: list,
     initial_states_list = [initial_states[i] for i in range(n_agents)]
     
     # Solve the masked game with all agents
-    game_state_trajs, game_control_trajs = solve_masked_game_differentiable(
-        agents, initial_states_list, targets, mask_values, 
-        num_iters=num_iters, reference_trajectories=None
+    # game_state_trajs, game_control_trajs = solve_masked_game_differentiable(
+    #     agents, initial_states_list, targets, mask_values, 
+    #     num_iters=num_iters, reference_trajectories=None
+    # )
+
+    game_state_trajs, game_control_trajs = solve_masked_game_differentiable_parallel(
+        agents,
+        initial_states_list,
+        targets,
+        mask_values,
+        num_iters=num_iters,
+        reference_trajectories=None
     )
     
     # Extract ego agent's trajectory from the game results
@@ -402,6 +425,10 @@ def batch_ego_agent_cost(predicted_masks: jnp.ndarray,
         ) 
         for _ in range(n_agents)
     ]
+
+    # initialize loss functions
+    for agent in shared_agents:
+        agent.create_loss_function_mask()
 
     # Extract observations and ref trajectories
     observations, ref_trajs, all_agents_ref_trajs = prepare_batch_for_ego_cost(batch_data, obs_input_type)

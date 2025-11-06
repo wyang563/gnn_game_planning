@@ -457,6 +457,11 @@ def load_trained_gnn_models(gnn_model_path: Optional[str], obs_input_type: str =
         with open(gnn_model_path, "rb") as f:
             gnn_model_bytes = pickle.load(f)
 
+        print("Loading Model with the following config:")
+        print(f"Message Passing Rounds: {message_passing_rounds}")
+        print(f"Edge Metric: {edge_metric}")
+        print(f"Edge Metric Top K: {edge_metric_top_k}")
+
         gnn_model = GNNSelectionNetwork(
             gru_hidden_size=gru_hidden_size,
             gru_time_decay_factor=config.gnn.gru_discount_factor,

@@ -6,7 +6,7 @@ game:
   T_observation: 10         # Number of steps to observe before solving the game
 
   # Agent configuration
-  N_agents: 20             # Total number of agents in the game
+  N_agents: 10             # Total number of agents in the game
   ego_agent_id: 0           # ID of the ego agent (usually 0)
   
   # State and control dimensions
@@ -22,12 +22,12 @@ game:
 
 optimization:
   # iLQGames solver parameters
-  num_iters: 100            # Number of iterations for iLQGames solver  
+  num_iters: 50            # Number of iterations for iLQGames solver  
   step_size: 0.005          # Step size for gradient descent
   
   # Cost function weights
   navigation_weight: 1.0    # Weight for navigation cost
-  collision_weight: 20.0    # Weight for collision avoidance
+  collision_weight: 2.0    # Weight for collision avoidance
   collision_scale: 1.0      # Scale factor in exponential collision cost
   control_weight: 0.1       # Weight for control cost
 
@@ -36,7 +36,7 @@ optimization:
   R: [0.01, 0.01]
 
 reference_generation:
-  num_samples: 2000
+  num_samples: 1000
   reference_gen_type: "variable" # ["fixed", "variable"] where variable is number of agents is random up to n_agents
   save_dir_fixed: "reference_trajectories_${N_agents}p"
   save_dir_variable: "reference_trajectories_upto_${N_agents}p"
@@ -95,24 +95,24 @@ psn:
 
 gnn:
   # Training parameters
-  learning_rate: 0.0005      # Learning rate for Adam optimizer
+  learning_rate: 0.001      # Learning rate for Adam optimizer
   batch_size: 32            # Batch size for training
   num_epochs: 50            # Number of training epochs
   dropout_rate: 0.3
 
   # Loss function weights
-  sigma1: 0.035               # Weight for mask sparsity loss
-  sigma2: 0.035               # Weight for mask binary loss
+  sigma1: 0.5               # Weight for mask sparsity loss
+  sigma2: 0.5               # Weight for mask binary loss
 
   # graph edge creation parameters
-  edge_metric: "full" # ["full", "nearest_neighbors", "jacobian", "barrier_function"]
-  edge_metric_top_k: 10 # number of top values to consider
+  edge_metric: "barrier-function" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
+  edge_metric_top_k: 5 # number of top values to consider
 
   # message passing rounds
-  num_message_passing_rounds: 2
+  num_message_passing_rounds: 3
 
   # type of loss function to use (similarity vs ego agent cost)
-  loss_type: "similarity" # ["similarity", "ego_agent_cost"]
+  loss_type: "ego_agent_cost" # ["similarity", "ego_agent_cost"]
 
   # gru time delay discount factor
   gru_discount_factor: 0.8
@@ -277,7 +277,7 @@ debug:
 # ============================================================================
 device:
   # Device selection
-  preferred_device: "gpu"   # Preferred device ["gpu", "cpu", "auto"]
+  preferred_device: "cpu"   # Preferred device ["gpu", "cpu", "auto"]
   
   # JAX configuration
   jax_platform_name: null  # JAX platform name (null = auto-detect)

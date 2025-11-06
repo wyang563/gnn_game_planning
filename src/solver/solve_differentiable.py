@@ -2,15 +2,105 @@ import jax
 import jax.numpy as jnp
 from typing import Tuple
 
-from load_config import load_config
+from load_config import load_config, get_device_config
+from solver.solve import create_batched_loss_functions_mask
 
 # Load configuration
 config = load_config()
 T_total = config.game.T_total
+u_dim = config.game.control_dim
+step_size = config.optimization.step_size
+ego_agent_id = config.game.ego_agent_id
 dt = config.game.dt
 Q = jnp.diag(jnp.array(config.optimization.Q))  # State cost weights [x, y, vx, vy]
 R = jnp.diag(jnp.array(config.optimization.R))  # Control cost weights [ax, ay]
+device = get_device_config()
 
+def solve_masked_game_differentiable_parallel(
+    agents: list,
+    initial_states: list,
+    target_positions: jnp.ndarray,
+    ego_mask_values: jnp.ndarray = None,
+    num_iters: int = 10,
+    reference_trajectories: list = None
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Solve the masked game using a fully differentiable parallel approach.
+    
+    This version uses JAX's vmap and scan to ensure proper gradient flow through
+    the entire optimization pipeline while leveraging parallelization.
+    
+    Args:
+        agents: List of agents (used for configuration)
+        initial_states: List of initial states for agents
+        target_positions: Target positions for agents
+        ego_mask_values: Mask values for ego agent's collision avoidance (n_agents long)
+        num_iters: Number of optimization iterations
+        reference_trajectories: Reference trajectories for agents
+        
+    Returns:
+        Tuple of (state_trajectories, control_trajectories)
+    """
+    n_agents = len(agents)
+
+    # create batched loss functions
+    jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss = create_batched_loss_functions_mask(agents, device)
+
+    # initialize batched arrays
+    control_trajs = jnp.zeros((n_agents, T_total, u_dim))
+    init_states = jnp.array([initial_states[i] for i in range(n_agents)])
+    ref_trajs = []
+    for i in range(n_agents):
+        start_pos = init_states[i][:2]
+        target_pos = target_positions[i]
+        ref_traj = jnp.linspace(start_pos, target_pos, T_total)
+        ref_trajs.append(ref_traj)
+    ref_trajs = jnp.array(ref_trajs)
+
+    # mask values make them global for all agents
+    masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
+    masks = masks.astype(jnp.float32)
+    masks = masks.at[ego_agent_id, :].set(ego_mask_values)
+
+    # tile mask over time horizon (n_agents, n_agents) -> (n_agents, T_total, n_agents)
+    masks = jnp.tile(masks[:, None, :], (1, T_total, 1))
+
+    def optimization_step(control_trajs, _):
+        """
+        Single optimization iteration - fully differentiable.
+        
+        This function is compatible with jax.lax.scan for gradient flow through iterations.
+        """
+        # Step 1: Linearize dynamics for all agents (batched, JIT-compiled)
+        x_trajs, A_trajs, B_trajs = jit_batched_linearize_dyn(init_states, control_trajs)
+        
+        # Step 2: Get other agents' states (fully differentiable)
+        all_x_pos = jnp.broadcast_to(x_trajs[None, :, :, :2], (n_agents, n_agents, T_total, 2))
+        other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
+        
+        # Step 3: Linearize loss for all agents (batched, JIT-compiled)
+        a_trajs, b_trajs = jit_batched_linearize_loss(x_trajs, control_trajs, ref_trajs, other_x_trajs, masks)
+        
+        # Step 4: Solve LQR subproblems for all agents (batched, JIT-compiled)
+        v_trajs, _ = jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
+        
+        # Step 5: Update control trajectories
+        new_control_trajs = control_trajs + step_size * v_trajs
+        
+        return new_control_trajs, x_trajs
+
+    # Use JAX scan for differentiable iteration (critical for gradient flow!)
+    training_iters = config.optimization.num_iters
+    final_control_trajs, x_traj_history = jax.lax.scan(
+        optimization_step, control_trajs, None, length=training_iters)
+    
+    # Get final state trajectories from last iteration
+    final_x_trajs = x_traj_history[-1]
+
+    # decompose results into lists
+    state_trajs = [final_x_trajs[i] for i in range(n_agents)]
+    control_trajs = [final_control_trajs[i] for i in range(n_agents)]
+    return state_trajs, control_trajs
 
 def solve_masked_game_differentiable(agents: list, initial_states: list, target_positions: jnp.ndarray,
                                    mask_values: jnp.ndarray = None, num_iters: int = 10, 
