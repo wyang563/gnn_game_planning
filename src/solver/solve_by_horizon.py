@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 import matplotlib.pyplot as plt
 from jax import vmap, jit, grad
+from datetime import datetime
 
 # Import from the main lqrax module
 import sys
@@ -195,20 +196,21 @@ if __name__ == "__main__":
     mask_horizon = config.game.T_observation
     u_dim = 2
     mask_mag = None # default definition of mask magnitude
+    use_only_ego_masks = False
 
     # model_type = "mlp"
     # model_path = "log/psn_gru_full_planning_true_goals_N_10_T_50_obs_10_lr_0.002_bs_64_sigma1_0.075_sigma2_0.075_epochs_50/20251023_001904/psn_best_model.pkl"
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
-    model_type = "gnn"
-    model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.05_sigma2_0.05_epochs_50_loss_type_similarity/20251105_222438/psn_best_model.pkl"
-    model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
-    use_only_ego_masks = False 
+    # model_type = "gnn"
+    # model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.05_sigma2_0.05_epochs_50_loss_type_similarity/20251105_222438/psn_best_model.pkl"
+    # model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
+    # use_only_ego_masks = False 
 
-    # model_type = "jacobian"
-    # mask_mag = 5
-    # model = None
-    # model_state = None
+    model_type = "jacobian"
+    mask_mag = 5
+    model = None
+    model_state = None
 
     # solve by horizon
     final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(
@@ -231,12 +233,13 @@ if __name__ == "__main__":
         collision_weight=collision_weight,
         collision_scale=collision_scale,
     )
-    plot_trajs(final_x_trajs, goals, init_ps, save_path="src/solver/test.png")
-    plot_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, "src/solver/test.gif")
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = f"log/solve_by_horizon_run/{timestamp}"
+    os.makedirs(out_dir, exist_ok=True)
+    plot_save_path = os.path.join(out_dir, "test.png")
+    gif_save_path = os.path.join(out_dir, "test.gif")
 
-
-
-
-
+    plot_trajs(final_x_trajs, goals, init_ps, save_path=plot_save_path)
+    plot_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, gif_save_path)
 

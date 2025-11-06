@@ -526,19 +526,21 @@ def train_step(
 
     def loss_fn_similarity(params):
         predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
+        prediced_ego_mask = predicted_masks[:, ego_agent_id, :]
         predicted_goals = extract_true_goals_from_batch(batch_data)
-        binary_loss_val = binary_loss(predicted_masks)
-        sparsity_loss_val = mask_sparsity_loss(predicted_masks)
-        similarity_loss_val = batch_similarity_loss(predicted_masks, predicted_goals, batch_data, obs_input_type=obs_input_type)
+        binary_loss_val = binary_loss(prediced_ego_mask)
+        sparsity_loss_val = mask_sparsity_loss(prediced_ego_mask)
+        similarity_loss_val = batch_similarity_loss(prediced_ego_mask, predicted_goals, batch_data, obs_input_type=obs_input_type)
         total_loss = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
         return total_loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val)
     
     def loss_fn_ego_cost(params):
         predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
+        prediced_ego_mask = predicted_masks[:, ego_agent_id, :]
         predicted_goals = extract_true_goals_from_batch(batch_data)
-        binary_loss_val = binary_loss(predicted_masks)
-        sparsity_loss_val = mask_sparsity_loss(predicted_masks)
-        ego_cost_loss_val = batch_ego_agent_cost(predicted_masks, predicted_goals, batch_data, obs_input_type=obs_input_type, apply_masks=False)
+        binary_loss_val = binary_loss(prediced_ego_mask)
+        sparsity_loss_val = mask_sparsity_loss(prediced_ego_mask)
+        ego_cost_loss_val = batch_ego_agent_cost(prediced_ego_mask, predicted_goals, batch_data, obs_input_type=obs_input_type, apply_masks=False)
         total_loss = ego_cost_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
         return total_loss, (binary_loss_val, sparsity_loss_val, ego_cost_loss_val)
     

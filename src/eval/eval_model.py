@@ -259,6 +259,7 @@ def eval_model(
                     model_state=method_state,
                     model_type=method_type,
                     device=device,
+                    use_only_ego_masks=False,
                     collision_weight=collision_weight,
                     collision_scale=collision_scale,
                     disable_tqdm=True,
