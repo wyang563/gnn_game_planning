@@ -65,7 +65,7 @@ sigma1 = config.gnn.sigma1
 sigma2 = config.gnn.sigma2  
 num_message_passing_rounds = config.gnn.num_message_passing_rounds
 edge_metric = config.gnn.edge_metric
-edge_metric_top_k = config.gnn.top_k
+edge_metric_top_k = config.gnn.edge_metric_top_k
 dropout_rate = config.gnn.dropout_rate
 
 gru_hidden_size = config.gnn.gru_hidden_size
@@ -264,7 +264,7 @@ class GNNSelectionNetwork(nn.Module):
             identity_matrix = jnp.eye(n_agents)
             graph_adj_matrix = graph_adj_matrix - identity_matrix[None, :, :]
 
-        elif self.edge_metric == "nearest_neighbors":
+        elif self.edge_metric == "nearest-neighbors":
             x_transposed = jnp.transpose(x, (0, 2, 1, 3))  # (batch_size, n_agents, T, state_dim)
             batched_nearest_neighbors = jax.vmap(
                 lambda x_single: nearest_neighbors_top_k(x_single, top_k=self.edge_metric_top_k),
@@ -280,7 +280,7 @@ class GNNSelectionNetwork(nn.Module):
             )
             graph_adj_matrix = batched_jacobian(x_transposed)
 
-        elif self.edge_metric == "barrier_function":
+        elif self.edge_metric == "barrier-function":
             x_transposed = jnp.transpose(x, (0, 2, 1, 3))  # (batch_size, n_agents, T, state_dim)
             
             # Use vmap to apply barrier_function_top_k over the batch dimension
@@ -289,6 +289,9 @@ class GNNSelectionNetwork(nn.Module):
                 in_axes=0  # vmap over the first axis (batch dimension)
             )
             graph_adj_matrix = batched_barrier_function(x_transposed)
+
+        else:
+            raise ValueError(f"Invalid edge metric: {self.edge_metric}")
 
         # transpose matrix so masked edges become incoming edges
         graph_adj_matrix = jnp.transpose(graph_adj_matrix, (0, 2, 1))
@@ -418,15 +421,53 @@ class GNNSelectionNetwork(nn.Module):
 # ============================================================================
 # MODEL LOADING UTILITIES
 # ============================================================================
+def parse_config_name(gnn_model_path: str) -> Dict[str, Any]:
+    # log/gnn_full_MP_3_edge_metric_barrier_function_top_k_5
+    gnn_model_path = gnn_model_path.split("/")[1] # first directory after log/
+    config_tokens = gnn_model_path.split("_")
+
+    message_passing_ind = config_tokens.index("MP")
+    message_passing_rounds = int(config_tokens[message_passing_ind + 1])
+
+    edge_metric_ind = config_tokens.index("edge-metric")
+    edge_metric = config_tokens[edge_metric_ind + 1]
+
+    edge_metric_top_k_ind = config_tokens.index("top-k")
+    edge_metric_top_k = int(config_tokens[edge_metric_top_k_ind + 1])
+
+    return {
+        "message-passing-rounds": message_passing_rounds,
+        "edge-metric": edge_metric,
+        "edge-metric-top_k": edge_metric_top_k
+    }
+
 def load_trained_gnn_models(gnn_model_path: Optional[str], obs_input_type: str = "full") -> Tuple[Optional[GNNSelectionNetwork], Any]:
     """
     Load trained GNNSelectionNetwork model from files.
     """
     if gnn_model_path is not None:
         print(f"Loading trained GNNSelectionNetwork model from: {gnn_model_path}")
+        
+        # need to parse model config from path
+        config_dict = parse_config_name(gnn_model_path)
+        message_passing_rounds = config_dict["message-passing-rounds"]
+        edge_metric = config_dict["edge-metric"]
+        edge_metric_top_k = config_dict["edge-metric-top_k"]
+
         with open(gnn_model_path, "rb") as f:
             gnn_model_bytes = pickle.load(f)
-        gnn_model = GNNSelectionNetwork(gru_hidden_size=gru_hidden_size, gru_time_decay_factor=config.gnn.gru_discount_factor, dropout_rate=dropout_rate, obs_input_type=obs_input_type, edge_metric=edge_metric)
+
+        gnn_model = GNNSelectionNetwork(
+            gru_hidden_size=gru_hidden_size,
+            gru_time_decay_factor=config.gnn.gru_discount_factor,
+            dropout_rate=dropout_rate,
+            obs_input_type=obs_input_type,
+            deterministic=False,
+            num_message_passing_rounds=message_passing_rounds,
+            edge_metric=edge_metric,
+            edge_metric_top_k=edge_metric_top_k
+        )
+
         gnn_trained_state = flax.serialization.from_bytes(gnn_model, gnn_model_bytes)
         print("✓ GNNSelectionNetwork model loaded successfully")
     else:
@@ -591,7 +632,7 @@ def train_gnn(
            List[float], List[float], List[float], train_state.TrainState, str, float, int]:
     
     # setup log directories
-    model_config_name = f"gnn_{obs_input_type}_MP_{num_message_passing_rounds}_edge_metric_{edge_metric}_top_k_{edge_metric_top_k}"
+    model_config_name = f"gnn_{obs_input_type}_MP_{num_message_passing_rounds}_edge-metric_{edge_metric}_top-k_{edge_metric_top_k}"
     train_config_name = f"train_n_agents_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}_loss_type_{loss_type}"
     
     # create train log setup
@@ -642,6 +683,8 @@ def train_gnn(
     print(f"Starting PSN training with pretrained goals...")
     print(f"Training parameters: epochs={num_epochs}, lr={learning_rate}, batch_size={batch_size}")
     print(f"Loss weights: σ1={sigma1}, σ2={sigma2}")
+    print(f"Edge metric: {edge_metric}")
+    print(f"Edge metric top-k: {edge_metric_top_k}")
     print(f"Training data: {len(training_data)} samples")
     print(f"Validation data: {len(validation_data)} samples")
     print(f"Device: {jax.devices()[0]}")
