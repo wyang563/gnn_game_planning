@@ -25,7 +25,8 @@ from models.train_gnn import GNNSelectionNetwork, load_trained_gnn_models
 from models.train_mlp import PlayerSelectionNetwork, load_trained_psn_models
 from tqdm import tqdm
 from utils.plot import plot_trajs, plot_agent_gif
-from eval.baselines import nearest_neighbors, jacobian, cost_evolution, barrier_function
+# from eval.baselines import nearest_neighbors, jacobian, cost_evolution, barrier_function
+from models.policies import nearest_neighbors_top_k, jacobian_top_k, barrier_function_top_k, cost_evolution_top_k
 
 def solve_by_horizon(
     agents: list[PointAgent],
@@ -42,7 +43,10 @@ def solve_by_horizon(
     model_state: Any,
     model_type: str,
     device: Any,
-    mask_mag: float = 3,
+    top_k_mask: float = 3,
+    use_only_ego_masks: bool = True,
+    collision_weight: float = 2.0,
+    collision_scale: float = 1.0,
 ) -> None:
     n_agents = len(agents)
 
@@ -92,33 +96,41 @@ def solve_by_horizon(
         # calculate ego masks based off model player selection type
         match model_type:
             case "mlp" | "gnn":
-                ego_masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
-                ego_masks = ego_masks[0]
+                masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
                 if model_type == "mlp":
-                    final_masks_mlp = jnp.zeros((n_agents))
-                    ego_masks = final_masks_mlp.at[1:].set(ego_masks)
+                    # Transform (n_agents, n_agents-1) mask to (n_agents, n_agents) with 0 at row i, col i since MLP only returns n_agents - 1 sized masks
+                    padded_masks = []
+                    for i in range(n_agents):
+                        mask_row = masks[i]
+                        row_with_zero = jnp.concatenate([mask_row[:i], jnp.array([0]), mask_row[i:]])
+                        padded_masks.append(row_with_zero)
+                    masks = jnp.stack(padded_masks, axis=0)
             case "nearest_neighbors":
-                ego_masks = nearest_neighbors(past_x_trajs, k=mask_mag)
+                masks = nearest_neighbors_top_k(past_x_trajs, top_k_mask)
             case "jacobian":
-                ego_masks = jacobian(past_x_trajs, k=mask_mag)
+                masks = jacobian_top_k(past_x_trajs, top_k_mask, dt=dt, w1=collision_weight, w2=collision_scale)
             case "cost_evolution":
-                ego_masks = cost_evolution(past_x_trajs, k=mask_mag)
+                masks = cost_evolution_top_k(past_x_trajs, k=top_k_mask, w1=collision_weight, w2=collision_scale)
             case "barrier_function":
-                ego_masks = barrier_function(past_x_trajs, k=mask_mag)
+                masks = barrier_function_top_k(past_x_trajs, top_k_mask, R=0.5, kappa=5.0)
             case "all":
-                ego_masks = jnp.ones((n_agents))
-                ego_masks = ego_masks.at[0].set(0.0)
+                masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
+                masks = masks.astype(jnp.float32)
             case _:
                 raise ValueError(f"Invalid model type: {model_type}")
 
         # threshold ego masks
-        ego_masks = jnp.where(ego_masks > mask_threshold, 1.0, 0.0)
-        simulation_masks.append(ego_masks)
+        masks = jnp.where(masks > mask_threshold, 1.0, 0.0)
 
-        masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
-        masks = masks.astype(jnp.float32)
-        # Set the first row of the masks matrix to be ego_masks
-        masks = masks.at[0].set(ego_masks)
+        # assumes ego agent_id is 0
+        simulation_masks.append(masks[0])
+
+        if use_only_ego_masks:
+            ego_masks = masks[0]
+            masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
+            masks = masks.astype(jnp.float32)
+            # Set the first row of the masks matrix to be ego_masks
+            masks = masks.at[0].set(ego_masks)
 
         # game solving optimization loop 
         for _ in range(num_iters + 1):
@@ -188,6 +200,7 @@ if __name__ == "__main__":
     model_type = "gnn"
     model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.05_sigma2_0.05_epochs_50_loss_type_similarity/20251105_222438/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
+    use_only_ego_masks = False
 
     # model_type = "jacobian"
     # mask_mag = 5
@@ -210,7 +223,10 @@ if __name__ == "__main__":
         model_state=model_state,
         model_type=model_type,
         device=device,
-        mask_mag=mask_mag,
+        use_only_ego_masks=use_only_ego_masks,
+        top_k_mask=mask_mag,
+        collision_weight=collision_weight,
+        collision_scale=collision_scale,
     )
     plot_trajs(final_x_trajs, goals, init_ps, save_path="src/solver/test.png")
     plot_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, "src/solver/test.gif")

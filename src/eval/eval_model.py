@@ -258,7 +258,9 @@ def eval_model(
                     model=method_model,
                     model_state=method_state,
                     model_type=method_type,
-                    device=device
+                    device=device,
+                    collision_weight=collision_weight,
+                    collision_scale=collision_scale,
                 )
                 
                 # Compute metrics
@@ -369,8 +371,8 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.05_sigma2_0.05_epochs_50_loss_type_similarity/20251105_222438/psn_best_model.pkl"  # e.g., "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.002_bs_32_sigma1_0.03_sigma2_0.03_epochs_50_mp_3_loss_type_similarity/20251027_194315/psn_best_model.pkl"
-    model_type = "gnn"  # "gnn" or "mlp"
+    model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.75_sigma2_0.75_epochs_50_loss_type_ego_agent_cost/20251105_222834/psn_best_model.pkl"
+    model_type = "gnn"  
     dataset_path = "src/data/eval_data_upto_10p"
 
     args = {

@@ -274,8 +274,10 @@ class GNNSelectionNetwork(nn.Module):
 
         elif self.edge_metric == "jacobian":
             x_transposed = jnp.transpose(x, (0, 2, 1, 3))  # (batch_size, n_agents, T, state_dim)
+            w1 = config.optimization.collision_weight
+            w2 = config.optimization.collision_scale
             batched_jacobian = jax.vmap(
-                lambda x_single: jacobian_top_k(x_single, top_k=self.edge_metric_top_k, dt=dt, w1=1.0, w2=0.5),
+                lambda x_single: jacobian_top_k(x_single, top_k=self.edge_metric_top_k, dt=dt, w1=w1, w2=w2),
                 in_axes=0  # vmap over the first axis (batch dimension)
             )
             graph_adj_matrix = batched_jacobian(x_transposed)

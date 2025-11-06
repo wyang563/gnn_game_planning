@@ -81,7 +81,9 @@ def generate_receding_horizon_trajectories(**kwargs):
             None,   # model
             None,   # model_state
             model_type,
-            device
+            device,
+            collision_weight=collision_weight,
+            collision_scale=collision_scale,
         )
 
         # Convert to proper format for saving

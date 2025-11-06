@@ -71,6 +71,46 @@ def nearest_neighbors_radius(past_x_trajs: jnp.ndarray, critical_radius: float) 
     within_radius_mask = jnp.where(mask_diag, False, within_radius_mask)
     return within_radius_mask.astype(jnp.int32)
 
+def cost_evolution_top_k(
+    past_x_trajs: jnp.ndarray,
+    top_k: int,
+    w1: float = 2.0, # default weight setting for collision weight
+    w2: float = 1.0, # default weight setting for collision scale
+) -> jnp.ndarray:
+    N, T, _ = past_x_trajs.shape
+    
+    # Handle edge cases - need at least 2 timesteps
+    if T < 2:
+        return jnp.zeros((N, N), dtype=jnp.int32)
+    
+    # Compute pairwise distance at current time (last timestep)
+    pos_current = past_x_trajs[:, -1, :2]  # Shape: (N, 2)
+    pos_diff = pos_current[:, None, :] - pos_current[None, :, :]  # Shape: (N, N, 2)
+    D = jnp.sum(pos_diff**2, axis=-1)  # Shape: (N, N)
+    
+    # Compute pairwise distance at previous time (second-to-last timestep)
+    pos_prev = past_x_trajs[:, -2, :2]  # Shape: (N, 2)
+    pos_diff_prev = pos_prev[:, None, :] - pos_prev[None, :, :]  # Shape: (N, N, 2)
+    D_prev = jnp.sum(pos_diff_prev**2, axis=-1)  # Shape: (N, N)
+    
+    # Compute cost evolution for all pairs
+    # Evolution of cost: current cost - previous cost
+    # Higher values mean cost is increasing (agents getting closer)
+    cost_evolution_values = w1 * jnp.exp(-w2 * D) - w1 * jnp.exp(-w2 * D_prev)  # Shape: (N, N)
+    
+    # Mask diagonal (agent with itself) with very low values so it won't be selected
+    cost_evolution_values = jnp.where(jnp.eye(N, dtype=bool), -jnp.inf, cost_evolution_values)
+    
+    # Get indices of top-k highest cost evolution for each agent
+    top_k_indices = jnp.argsort(cost_evolution_values, axis=1)[:, -top_k:]
+    
+    # Convert indices to mask format
+    mask = jnp.zeros((N, N), dtype=jnp.int32)
+    row_indices = jnp.arange(N)[:, None]  # Shape: [N, 1]
+    mask = mask.at[row_indices, top_k_indices].set(1)
+    
+    return mask
+
 def barrier_function_top_k(
     past_x_trajs: jnp.ndarray,
     top_k: int,
@@ -80,8 +120,8 @@ def barrier_function_top_k(
     N = past_x_trajs.shape[0]
     
     # Extract positions and velocities at the last time step
-    positions = past_x_trajs[:, -1, :2]  # Shape: (N, 2)
-    velocities = past_x_trajs[:, -1, 2:4]  # Shape: (N, 2)
+    positions = past_x_trajs[:, -1, :2]  
+    velocities = past_x_trajs[:, -1, 2:4]
     
     # Calculate pairwise position differences: pos[i] - pos[j]
     pos_diff = positions[:, None, :] - positions[None, :, :]  # Shape: (N, N, 2)
