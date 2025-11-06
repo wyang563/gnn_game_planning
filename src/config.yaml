@@ -101,11 +101,11 @@ gnn:
   dropout_rate: 0.3
 
   # Loss function weights
-  sigma1: 0.5               # Weight for mask sparsity loss
-  sigma2: 0.5               # Weight for mask binary loss
+  sigma1: 0.75               # Weight for mask sparsity loss
+  sigma2: 0.75               # Weight for mask binary loss
 
   # graph edge creation parameters
-  edge_metric: "barrier-function" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
+  edge_metric: "full" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
   edge_metric_top_k: 5 # number of top values to consider
 
   # message passing rounds

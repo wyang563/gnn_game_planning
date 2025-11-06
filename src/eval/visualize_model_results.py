@@ -11,6 +11,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 import numpy as np
+import os
 
 try:
     import seaborn as sns
@@ -169,15 +170,15 @@ def create_summary_table(results, output_path=None):
 
 def main():
     parser = argparse.ArgumentParser(description='Visualize evaluation results')
-    parser.add_argument('--results', type=str, default='eval_results',
-                       help='Directory containing result CSV files')
-    parser.add_argument('--output', type=str, default='eval_results/plots',
-                       help='Output directory for plots')
+    parser.add_argument('--model_path', type=str, default=None,
+                       help='path to the model')
     parser.add_argument('--show', action='store_true',
                        help='Show plots interactively instead of saving')
     
     args = parser.parse_args()
     
+    results_path = Path(args.model_path).parent / "eval_results"
+
     print(f"Loading results from {args.results}...")
     results = load_results(args.results)
     
@@ -195,6 +196,8 @@ def main():
     
     if not args.show:
         # Create plots
+        args.output = results_path / "plots"
+        os.makedirs(args.output, exist_ok=True)
         print(f"\nGenerating plots in {args.output}...")
         plot_all_metrics(results, args.output)
         

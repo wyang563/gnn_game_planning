@@ -309,7 +309,8 @@ def eval_model(
                 print(f"  {metric:30s}: {mean_val:10.4f} ± {std_val:10.4f}")
     
     # Save results to CSV
-    output_dir = Path("eval_results")
+    model_dir = Path(model_path).parent
+    output_dir = model_dir / "eval_results"
     output_dir.mkdir(exist_ok=True)
     
     for method in methods:
@@ -368,7 +369,7 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = None  # e.g., "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.002_bs_32_sigma1_0.03_sigma2_0.03_epochs_50_mp_3_loss_type_similarity/20251027_194315/psn_best_model.pkl"
+    model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.05_sigma2_0.05_epochs_50_loss_type_similarity/20251105_222438/psn_best_model.pkl"  # e.g., "log/gnn_full_planning_true_goals_maxN_10_T_50_obs_10_lr_0.002_bs_32_sigma1_0.03_sigma2_0.03_epochs_50_mp_3_loss_type_similarity/20251027_194315/psn_best_model.pkl"
     model_type = "gnn"  # "gnn" or "mlp"
     dataset_path = "src/data/eval_data_upto_10p"
 

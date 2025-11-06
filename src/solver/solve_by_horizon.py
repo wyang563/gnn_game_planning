@@ -161,13 +161,13 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # redefinitions of game parameters to test adapatbility of model 
-    n_agents = 20
+    n_agents = 50
     tsteps = 100
     num_iters = 100
-    collision_weight = 2.0
+    collision_weight = 5.0
 
     # genera random inits
-    boundary_size = 3.5
+    boundary_size = 10.0
     init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size))
     init_ps = jnp.array([jnp.array([init_ps[i][0], init_ps[i][1], 0.0, 0.0]) for i in range(n_agents)])
     agents = [PointAgent(dt, x_dim=4, u_dim=2, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=control_weight, device=device) for _ in range(n_agents)]
@@ -186,7 +186,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/gnn_full_MP_3_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.035_sigma2_0.035_epochs_50_loss_type_similarity/20251105_211048/psn_best_model.pkl"
+    model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.05_sigma2_0.05_epochs_50_loss_type_similarity/20251105_222438/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
 
     # model_type = "jacobian"
