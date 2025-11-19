@@ -95,21 +95,21 @@ psn:
 
 gnn:
   # Training parameters
-  learning_rate: 0.001      # Learning rate for Adam optimizer
+  learning_rate: 0.0003      # Learning rate for Adam optimizer
   batch_size: 32            # Batch size for training
   num_epochs: 50            # Number of training epochs
   dropout_rate: 0.3
 
   # Loss function weights
-  sigma1: 0.75               # Weight for mask sparsity loss
-  sigma2: 0.75               # Weight for mask binary loss
+  sigma1: 1.0               # Weight for mask sparsity loss
+  sigma2: 1.0              # Weight for mask binary loss
 
   # graph edge creation parameters
-  edge_metric: "full" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
+  edge_metric: "barrier-function" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
   edge_metric_top_k: 5 # number of top values to consider
 
   # message passing rounds
-  num_message_passing_rounds: 3
+  num_message_passing_rounds: 2
 
   # type of loss function to use (similarity vs ego agent cost)
   loss_type: "ego_agent_cost" # ["similarity", "ego_agent_cost"]

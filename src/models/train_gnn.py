@@ -45,7 +45,7 @@ from models.policies import barrier_function_top_k, jacobian_top_k, nearest_neig
 # ============================================================================
 # GLOBAL PARAMETERS
 # ============================================================================
-config = load_config()
+config = load_config(config_path="/home/alex/gnn_game_planning/src/config.yaml")
 
 # Game parameters
 N_agents = config.game.N_agents
@@ -434,8 +434,15 @@ class GNNSelectionNetwork(nn.Module):
 # MODEL LOADING UTILITIES
 # ============================================================================
 def parse_config_name(gnn_model_path: str) -> Dict[str, Any]:
+    # first check if path is absolute and remove header
+
     # log/gnn_full_MP_3_edge_metric_barrier_function_top_k_5
-    gnn_model_path = gnn_model_path.split("/")[1] # first directory after log/
+    if os.path.isabs(gnn_model_path):
+        gnn_model_path_tokens = gnn_model_path.split("/")
+        log_dir_ind = gnn_model_path_tokens.index("log")
+        gnn_model_path = gnn_model_path_tokens[log_dir_ind + 1]
+    else:
+        gnn_model_path = gnn_model_path.split("/")[1] # first directory after log/
     config_tokens = gnn_model_path.split("_")
 
     message_passing_ind = config_tokens.index("MP")
@@ -598,22 +605,23 @@ def validation_step(state: train_state.TrainState, validation_data: List[Dict[st
         
         # Get predicted mask from PSN (validation mode, no dropout)
         predicted_masks = state.apply_fn({'params': state.params}, observations, deterministic=True)
+        predicted_ego_mask = predicted_masks[:, ego_agent_id, :]
         
         # Store masks for analysis
-        all_predicted_masks.append(predicted_masks)
+        all_predicted_masks.append(predicted_ego_mask)
         
         # Extract true goals from reference data
         predicted_goals = extract_true_goals_from_batch(batch_data)
         
         # Compute validation loss components
-        binary_loss_val = binary_loss(predicted_masks)
-        sparsity_loss_val = mask_sparsity_loss(predicted_masks)
+        binary_loss_val = binary_loss(predicted_ego_mask)
+        sparsity_loss_val = mask_sparsity_loss(predicted_ego_mask)
         
         # Compute similarity loss using game solving
         if loss_type == "similarity":
-            similarity_loss_val = batch_similarity_loss(predicted_masks, predicted_goals, batch_data)
+            similarity_loss_val = batch_similarity_loss(predicted_ego_mask, predicted_goals, batch_data)
         elif loss_type == "ego_agent_cost":
-            similarity_loss_val = batch_ego_agent_cost(predicted_masks, predicted_goals, batch_data, obs_input_type=obs_input_type, apply_masks=False)
+            similarity_loss_val = batch_ego_agent_cost(predicted_ego_mask, predicted_goals, batch_data, obs_input_type=obs_input_type, apply_masks=False)
         else:
             raise ValueError(f"loss type invalid: {loss_type}")
         
@@ -870,7 +878,7 @@ def train_gnn(
     
     print(f"\nTraining completed! Best model found at epoch {best_epoch + 1} with loss: {best_loss:.4f}")
     
-    return training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, state, log_dir, best_loss, best_epoch
+    return training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, state, best_loss, best_epoch
 
 if __name__ == "__main__":
     print("=" * 80)
@@ -910,7 +918,7 @@ if __name__ == "__main__":
     
     training_losses, validation_losses, binary_losses, sparsity_losses, \
     ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
-    validation_ego_agent_costs, trained_state, log_dir, best_loss, best_epoch = train_gnn(
+    validation_ego_agent_costs, trained_state, best_loss, best_epoch = train_gnn(
         gnn_model,
         training_data,
         validation_data,

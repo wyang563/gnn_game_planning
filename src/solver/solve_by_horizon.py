@@ -45,6 +45,7 @@ def solve_by_horizon(
     model_type: str,
     device: Any,
     top_k_mask: float = 3,
+    dt: float = 0.1,
     use_only_ego_masks: bool = True,
     collision_weight: float = 2.0,
     collision_scale: float = 1.0,
@@ -113,7 +114,7 @@ def solve_by_horizon(
             case "jacobian":
                 masks = jacobian_top_k(past_x_trajs, top_k_mask, dt=dt, w1=collision_weight, w2=collision_scale)
             case "cost_evolution":
-                masks = cost_evolution_top_k(past_x_trajs, k=top_k_mask, w1=collision_weight, w2=collision_scale)
+                masks = cost_evolution_top_k(past_x_trajs, top_k=top_k_mask, w1=collision_weight, w2=collision_scale)
             case "barrier_function":
                 masks = barrier_function_top_k(past_x_trajs, top_k_mask, R=0.5, kappa=5.0)
             case "all":
@@ -177,7 +178,7 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # redefinitions of game parameters to test adapatbility of model 
-    n_agents = 25
+    n_agents = 50 
     tsteps = 200 
     num_iters = 100
     collision_weight = 5.0
@@ -202,15 +203,15 @@ if __name__ == "__main__":
     # model_path = "log/psn_gru_full_planning_true_goals_N_10_T_50_obs_10_lr_0.002_bs_64_sigma1_0.075_sigma2_0.075_epochs_50/20251023_001904/psn_best_model.pkl"
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
-    # model_type = "gnn"
-    # model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.05_sigma2_0.05_epochs_50_loss_type_similarity/20251105_222438/psn_best_model.pkl"
-    # model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
-    # use_only_ego_masks = False 
+    model_type = "gnn"
+    model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251110_201039/psn_best_model.pkl"
+    model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
+    use_only_ego_masks = False 
 
-    model_type = "jacobian"
-    mask_mag = 5
-    model = None
-    model_state = None
+    # model_type = "jacobian"
+    # mask_mag = 5
+    # model = None
+    # model_state = None
 
     # solve by horizon
     final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(

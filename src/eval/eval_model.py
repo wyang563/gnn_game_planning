@@ -23,6 +23,7 @@ def compute_metrics(
     x_trajs: jnp.ndarray,
     control_trajs: jnp.ndarray,
     simulation_masks: List[jnp.ndarray],
+    all_players_ref_trajs: jnp.ndarray,
     ref_trajs: jnp.ndarray,
     observation_horizon: int = 10
 ) -> Dict[str, float]:
@@ -47,27 +48,27 @@ def compute_metrics(
     # For ego agent (agent 0)
     ego_traj = x_trajs[0]  # (T, state_dim)
     ego_control = control_trajs[0]  # (T, u_dim)
+    ego_all_players_ref = all_players_ref_trajs[0]  # (T, 2)
     ego_ref = ref_trajs[0]  # (T, 2)
     
-    # ADE: Average Displacement Error (for prediction phase K:K+T)
-    # Since we don't have ground truth, we use the reference trajectory
+    # ADE: Average Displacement Error (for prediction phase K:K+T) relative to trajectories when all players in mask
     pred_positions = ego_traj[K:, :2]
-    ref_positions = ego_ref[K:]
+    ego_all_players_ref_positions = ego_all_players_ref[K:, :2]
     if len(pred_positions) > 0:
-        ade = jnp.mean(jnp.linalg.norm(pred_positions - ref_positions, axis=1))
+        ade = jnp.mean(jnp.linalg.norm(pred_positions - ego_all_players_ref_positions, axis=1))
         metrics['ADE'] = float(ade)
     else:
         metrics['ADE'] = 0.0
     
     # FDE: Final Displacement Error
     if len(pred_positions) > 0:
-        fde = jnp.linalg.norm(pred_positions[-1] - ref_positions[-1])
+        fde = jnp.linalg.norm(pred_positions[-1] - ego_all_players_ref_positions[-1])
         metrics['FDE'] = float(fde)
     else:
         metrics['FDE'] = 0.0
     
     # Navigation Cost: sum of squared distance to reference
-    nav_cost = jnp.sum(jnp.linalg.norm(ego_traj[:, :2] - ego_ref, axis=1) ** 2)
+    nav_cost = jnp.sum(jnp.linalg.norm(ego_traj[:, :2] - ego_ref[:, :2], axis=1) ** 2)
     metrics['Nav_Cost'] = float(nav_cost)
     
     # Collision Cost: sum of exponential proximity costs with all other agents
@@ -135,7 +136,6 @@ def compute_metrics(
     
     return metrics
 
-
 def load_dataset(dataset_path: str) -> List[Dict]:
     """Load all JSON files from the dataset directory."""
     dataset_dir = Path(dataset_path)
@@ -164,7 +164,6 @@ def eval_model(
     control_weight = kwargs["control_weight"]
     Q = kwargs["Q"]
     R = kwargs["R"]
-    dt = kwargs["dt"]
     tsteps = kwargs["tsteps"]
     planning_horizon = kwargs["planning_horizon"]
     mask_horizon = kwargs["mask_horizon"]
@@ -172,6 +171,7 @@ def eval_model(
     device = kwargs["device"]
     u_dim = kwargs.get("u_dim", 2)
     x_dim = kwargs.get("x_dim", 4)
+    dt = kwargs.get("dt", 0.1)
 
     # Load dataset
     print(f"Loading dataset from {dataset_path}...")
@@ -179,7 +179,7 @@ def eval_model(
     print(f"Loaded {len(dataset)} samples")
 
     # Define all methods to evaluate
-    methods = ["nearest_neighbors", "jacobian", "cost_evolution", "barrier_function", "all"]
+    methods = ["nearest_neighbors", "jacobian", "cost_evolution", "barrier_function"]
     
     # Load model if provided
     if model_path is not None:
@@ -227,6 +227,34 @@ def eval_model(
         ref_trajs = jnp.array([jnp.linspace(init_ps[i][:2], goals[i], tsteps) for i in range(n_agents)])
         
         # Evaluate each method
+
+        # first run all players in horizon
+        method_type = "all"
+        method_model = None
+        method_state = None
+
+        all_players_x_trajs, _, _ = solve_by_horizon(
+            agents=agents,
+            initial_states=init_ps,
+            ref_trajs=ref_trajs,
+            num_iters=num_iters,
+            u_dim=u_dim,
+            tsteps=tsteps,
+            planning_horizon=planning_horizon,
+            mask_horizon=mask_horizon,
+            mask_threshold=mask_threshold,
+            step_size=step_size,
+            model=method_model,
+            model_state=method_state,
+            model_type=method_type,
+            device=device,
+            dt=dt,
+            use_only_ego_masks=False,
+            collision_weight=collision_weight,
+            collision_scale=collision_scale,
+            disable_tqdm=True,
+        )
+
         for method in methods:
             try:
                 # Determine model type for solve_by_horizon
@@ -259,6 +287,7 @@ def eval_model(
                     model_state=method_state,
                     model_type=method_type,
                     device=device,
+                    dt=dt,
                     use_only_ego_masks=False,
                     collision_weight=collision_weight,
                     collision_scale=collision_scale,
@@ -270,6 +299,7 @@ def eval_model(
                     final_x_trajs, 
                     control_trajs_result, 
                     simulation_masks, 
+                    all_players_x_trajs,
                     ref_trajs,
                     observation_horizon=mask_horizon
                 )
@@ -373,9 +403,9 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.75_sigma2_0.75_epochs_50_loss_type_ego_agent_cost/20251105_222834/psn_best_model.pkl"
+    model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_epochs_50_loss_type_ego_agent_cost/20251110_201139/psn_best_model.pkl"
     model_type = "gnn"  
-    dataset_path = "src/data/eval_data_upto_10p"
+    dataset_path = "src/data/eval_data_upto_20p"
 
     args = {
         "model_path": model_path,
@@ -396,6 +426,7 @@ if __name__ == "__main__":
         "device": device,
         "u_dim": 2,
         "x_dim": 4,
+        "dt": dt, 
     }
 
     eval_model(**args)

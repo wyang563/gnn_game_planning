@@ -1,16 +1,23 @@
 import json
-from load_config import load_config
 import os
+import sys
 import random
-from utils.goal_init import random_init
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+
+# Add project root to path for imports
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+    
+from load_config import load_config
+from utils.goal_init import random_init
 
 if __name__ == "__main__":
     config = load_config()
     n_agents = config.game.N_agents
 
-    num_samples = 250
+    num_samples = 150 
     output_dir = f"src/data/eval_data_upto_{n_agents}p"
     os.makedirs(output_dir, exist_ok=True)
 

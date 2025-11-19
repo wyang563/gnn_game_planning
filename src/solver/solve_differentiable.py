@@ -55,6 +55,7 @@ def solve_masked_game_differentiable_parallel(
         target_pos = target_positions[i]
         ref_traj = jnp.linspace(start_pos, target_pos, T_total)
         ref_trajs.append(ref_traj)
+
     ref_trajs = jnp.array(ref_trajs)
 
     # mask values make them global for all agents

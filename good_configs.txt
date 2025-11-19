@@ -1,0 +1,15 @@
+GNN Similarity Based Loss
+message passing rounds = 2
+full edges metric
+sigma_1, sigma_2 = 0.11
+lr = 0.0003
+batch_size = 32
+epochs = 50
+
+GNN Ego Agent Based Loss
+message passing rounds = 2
+full edges metric
+sigma_1, sigma_2 = 1.0
+lr = 0.0003
+batch_size = 32
+epochs = 50
