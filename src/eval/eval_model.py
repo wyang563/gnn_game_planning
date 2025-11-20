@@ -60,9 +60,10 @@ def compute_metrics(
     else:
         metrics['ADE'] = 0.0
     
-    # FDE: Final Displacement Error
+    # FDE: Final Displacement Error (from intended goal)
+    ego_goal = ego_ref[-1, :2]
     if len(pred_positions) > 0:
-        fde = jnp.linalg.norm(pred_positions[-1] - ego_all_players_ref_positions[-1])
+        fde = jnp.linalg.norm(pred_positions[-1] - ego_goal)
         metrics['FDE'] = float(fde)
     else:
         metrics['FDE'] = 0.0
@@ -403,7 +404,7 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_epochs_50_loss_type_ego_agent_cost/20251110_201139/psn_best_model.pkl"
+    model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251110_201039/psn_best_model.pkl"
     model_type = "gnn"  
     dataset_path = "src/data/eval_data_upto_20p"
 

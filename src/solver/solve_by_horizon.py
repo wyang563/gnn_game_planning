@@ -29,6 +29,162 @@ from utils.plot import plot_trajs, plot_agent_gif
 # from eval.baselines import nearest_neighbors, jacobian, cost_evolution, barrier_function
 from models.policies import nearest_neighbors_top_k, jacobian_top_k, barrier_function_top_k, cost_evolution_top_k
 
+# this is the sequential version so we can calculate compute performance metrics
+def solve_by_horizon_sequential(
+    agents: list[PointAgent],
+    initial_states: jnp.ndarray,
+    ref_trajs: jnp.ndarray,
+    num_iters: int,
+    planning_horizon: int,
+    u_dim: int,
+    tsteps: int,
+    mask_horizon: int,
+    mask_threshold: float,
+    step_size: float,
+    model: nn.Module,
+    model_state: Any,
+    model_type: str,
+    device: Any,
+    top_k_mask: float = 3,
+    dt: float = 0.1,
+    use_only_ego_masks: bool = True,
+    collision_weight: float = 2.0,
+    collision_scale: float = 1.0,
+    disable_tqdm: bool = False,
+):
+    total_game_theory_optimization_time = 0.0
+    n_agents = len(agents)
+    control_trajs = jnp.zeros((n_agents, tsteps, u_dim))
+    init_states = jnp.array([initial_states[i] for i in range(n_agents)])
+    
+    simulation_masks = []
+
+    for iter in tqdm(range(tsteps + 1), disable=disable_tqdm):
+        x_trajs = []
+        for i in range(n_agents):
+            agent_x_traj, _, _ = agents[i].linearize_dyn(init_states[i], control_trajs[i])
+            x_trajs.append(agent_x_traj)
+        x_trajs = jnp.stack(x_trajs, axis=0)
+        horizon_x0s = x_trajs[:, iter]
+        horizon_u_trajs = jnp.zeros((n_agents, planning_horizon, u_dim))
+
+        start_ind = min(iter, tsteps - 1)
+        end_ind = min(start_ind + planning_horizon, tsteps)
+        horizon_ref_trajs = ref_trajs[:, start_ind:end_ind, :]
+        if horizon_ref_trajs.shape[1] < planning_horizon:
+            padding = jnp.tile(horizon_ref_trajs[:, -1:], (1, planning_horizon - horizon_ref_trajs.shape[1], 1))
+            horizon_ref_trajs = jnp.concatenate([horizon_ref_trajs, padding], axis=1)
+        
+        # get mask horizon input trajs
+        start_ind = max(0, iter - mask_horizon)
+        end_ind = max(iter, 1)
+
+        # get past x_trajs
+        past_x_trajs = x_trajs[:, start_ind:end_ind, :]
+        if past_x_trajs.shape[1] < mask_horizon:
+            padding = jnp.tile(past_x_trajs[:, -1:, :], (1, mask_horizon - past_x_trajs.shape[1], 1))
+            past_x_trajs = jnp.concatenate([past_x_trajs, padding], axis=1)
+        
+        # get mask based off past x_trajs
+        if model_type == "mlp":
+            past_x_trajs = past_x_trajs.reshape(n_agents, -1)
+        elif model_type == "gnn":
+            past_x_trajs = past_x_trajs.transpose(1, 0, 2)
+        elif model_type == "all":
+            pass
+    
+        batch_past_x_trajs = past_x_trajs[None, ...]
+
+        # calculate ego masks based off model player selection type
+        match model_type:
+            case "mlp" | "gnn":
+                masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
+                masks = jnp.squeeze(masks, axis=0) # squeeze batch dimension
+                if model_type == "mlp":
+                    # Transform (n_agents, n_agents-1) mask to (n_agents, n_agents) with 0 at row i, col i since MLP only returns n_agents - 1 sized masks
+                    padded_masks = []
+                    for i in range(n_agents):
+                        mask_row = masks[i]
+                        row_with_zero = jnp.concatenate([mask_row[:i], jnp.array([0]), mask_row[i:]])
+                        padded_masks.append(row_with_zero)
+                    masks = jnp.stack(padded_masks, axis=0)
+            case "nearest_neighbors":
+                masks = nearest_neighbors_top_k(past_x_trajs, top_k_mask)
+            case "jacobian":
+                masks = jacobian_top_k(past_x_trajs, top_k_mask, dt=dt, w1=collision_weight, w2=collision_scale)
+            case "cost_evolution":
+                masks = cost_evolution_top_k(past_x_trajs, top_k=top_k_mask, w1=collision_weight, w2=collision_scale)
+            case "barrier_function":
+                masks = barrier_function_top_k(past_x_trajs, top_k_mask, R=0.5, kappa=5.0)
+            case "all":
+                masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
+                masks = masks.astype(jnp.float32)
+            case _:
+                raise ValueError(f"Invalid model type: {model_type}")
+
+        # threshold ego masks
+        masks = jnp.where(masks > mask_threshold, 1.0, 0.0)
+
+        # assumes ego agent_id is 0
+        simulation_masks.append(masks[0])
+
+        # condition for if we want all other agents to consider every other agent
+        if use_only_ego_masks:
+            ego_masks = masks[0]
+            masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
+            masks = masks.astype(jnp.float32)
+            # Set the first row of the masks matrix to be ego_masks
+            masks = masks.at[0].set(ego_masks)
+        
+        optimization_start_time = time.time()
+        for _ in range(num_iters + 1):
+            horizon_x_trajs = []
+            A_trajs = []
+            B_trajs = []
+            for agent_id in range(n_agents):
+                agent_horizon_x_traj, agent_A_traj, agent_B_traj = agents[agent_id].linearize_dyn(horizon_x0s[agent_id], horizon_u_trajs[agent_id])
+                horizon_x_trajs.append(agent_horizon_x_traj)
+                A_trajs.append(agent_A_traj)
+                B_trajs.append(agent_B_traj)
+
+            horizon_x_trajs = jnp.stack(horizon_x_trajs, axis=0)
+
+            # calcualte other x_trajs based off mask
+            a_trajs = []
+            b_trajs = []
+            for agent_id in range(n_agents):
+                agent_other_states = horizon_x_trajs[masks[agent_id] != 0]
+                agent_other_states = agent_other_states.transpose(1, 0, 2)
+                a_traj, b_traj = agents[agent_id].linearize_loss(horizon_x_trajs[agent_id], horizon_u_trajs[agent_id], horizon_ref_trajs[agent_id], agent_other_states)
+                a_trajs.append(a_traj)
+                b_trajs.append(b_traj)
+            
+            control_updates = []
+            # calculate optimal control
+            for i in range(n_agents):
+                v_traj, _ = agents[i].compiled_solve(A_trajs[i], B_trajs[i], a_trajs[i], b_trajs[i])
+                control_updates.append(v_traj)
+
+            # update u_trajs
+            for i in range(n_agents):
+                horizon_u_trajs = horizon_u_trajs.at[i].add(step_size * control_updates[i])
+
+
+        optimization_end_time = time.time()
+        total_game_theory_optimization_time += optimization_end_time - optimization_start_time
+
+        # update u_trajs
+        control_trajs = control_trajs.at[:, iter, :].set(horizon_u_trajs[:, 0, :])
+    
+    # calculate final x_trajs
+    final_x_trajs = []
+    for agent_id in range(n_agents):
+        agent_horizon_x_traj, _, _ = agents[agent_id].linearize_dyn(horizon_x0s[agent_id], horizon_u_trajs[agent_id])
+        final_x_trajs.append(agent_horizon_x_traj)
+    final_x_trajs = jnp.stack(final_x_trajs, axis=0)
+    return final_x_trajs, control_trajs, simulation_masks, total_game_theory_optimization_time
+
+# standard parallelized/optimized version of solver
 def solve_by_horizon(
     agents: list[PointAgent],
     initial_states: jnp.ndarray,
@@ -50,7 +206,7 @@ def solve_by_horizon(
     collision_weight: float = 2.0,
     collision_scale: float = 1.0,
     disable_tqdm: bool = False,
-) -> None:
+): 
     n_agents = len(agents)
 
     # create batched functions
@@ -191,7 +347,7 @@ if __name__ == "__main__":
 
     # setup loss functions
     for agent in agents:
-        agent.create_loss_function_mask()
+        agent.create_loss_functions_no_mask()
 
     ref_trajs = jnp.array([jnp.linspace(init_ps[i][:2], goals[i], tsteps) for i in range(n_agents)])
     mask_horizon = config.game.T_observation
@@ -214,7 +370,7 @@ if __name__ == "__main__":
     # model_state = None
 
     # solve by horizon
-    final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(
+    final_x_trajs, control_trajs, simulation_masks, total_game_theory_optimization_time = solve_by_horizon_sequential(
         agents=agents,
         initial_states=init_ps,
         ref_trajs=ref_trajs,
@@ -234,6 +390,7 @@ if __name__ == "__main__":
         collision_weight=collision_weight,
         collision_scale=collision_scale,
     )
+    print(f"Total game theory optimization time: {total_game_theory_optimization_time}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = f"log/solve_by_horizon_run/{timestamp}"
@@ -241,6 +398,6 @@ if __name__ == "__main__":
     plot_save_path = os.path.join(out_dir, "test.png")
     gif_save_path = os.path.join(out_dir, "test.gif")
 
-    plot_trajs(final_x_trajs, goals, init_ps, save_path=plot_save_path)
-    plot_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, gif_save_path)
+    # plot_trajs(final_x_trajs, goals, init_ps, save_path=plot_save_path)
+    # plot_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, gif_save_path)
 
