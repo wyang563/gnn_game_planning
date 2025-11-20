@@ -21,12 +21,12 @@ dt = config.game.dt
 T_total = config.game.T_total
 T_observation = config.psn.observation_length
 T_reference = config.game.T_total
-state_dim = config.game.state_dim
-control_dim = config.game.control_dim
 
 # Game solving parameters - get agent-specific config
 agent_type = config.game.agent_type
 opt_config = getattr(config.optimization, agent_type)
+state_dim = opt_config.state_dim
+control_dim = opt_config.control_dim
 num_iters = opt_config.num_iters
 step_size = opt_config.step_size
 collision_weight = opt_config.collision_weight

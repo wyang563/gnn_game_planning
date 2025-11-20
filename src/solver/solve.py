@@ -30,10 +30,7 @@ from utils.goal_init import (
 
 from utils.agent_selection_utils import (
     agent_type_to_agent_class,
-    agent_type_to_state,
-    agent_type_to_Q_R_matrices,
     agent_type_to_plot_functions,
-    agent_type_to_optimization_weights,
 )
 
 def create_loss_functions(agents, mode):

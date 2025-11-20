@@ -54,8 +54,6 @@ dt = config.game.dt
 T_total = config.game.T_total
 T_observation = config.game.T_observation
 T_reference = config.game.T_total
-state_dim = config.game.state_dim
-control_dim = config.game.control_dim
 
 # GNN training parameters
 num_epochs = config.gnn.num_epochs
@@ -77,6 +75,8 @@ agent_type = config.game.agent_type
 opt_config = getattr(config.optimization, agent_type)
 num_iters = opt_config.num_iters
 step_size = opt_config.step_size
+state_dim = opt_config.state_dim
+control_dim = opt_config.control_dim
 Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights [x, y, vx, vy]
 R = jnp.diag(jnp.array(opt_config.R))               # Control cost weights [ax, ay]
 

@@ -26,7 +26,10 @@ else:
     raise ValueError(f"Invalid model type: {model_type}")
 
 T_reference = config.game.T_total
-state_dim = config.game.state_dim
+# Get agent-specific state_dim from optimization config
+agent_type = config.game.agent_type
+opt_config = getattr(config.optimization, agent_type)
+state_dim = opt_config.state_dim
 
 def load_reference_trajectories(data_dir: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Load reference trajectories from directory containing individual JSON files and split into training and validation sets."""

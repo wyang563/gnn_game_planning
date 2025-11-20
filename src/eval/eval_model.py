@@ -425,8 +425,8 @@ if __name__ == "__main__":
         "mask_horizon": mask_horizon,
         "mask_threshold": mask_threshold,
         "device": device,
-        "u_dim": 2,
-        "x_dim": 4,
+        "u_dim": opt_config.control_dim,
+        "x_dim": opt_config.state_dim,
         "dt": dt, 
     }
 

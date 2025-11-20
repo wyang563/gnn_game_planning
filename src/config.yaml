@@ -42,7 +42,7 @@ optimization:
   
   drone:
     # iLQGames solver parameters
-    num_iters: 50            # Number of iterations for iLQGames solver  
+    num_iters: 150            # Number of iterations for iLQGames solver  
     step_size: 0.005          # Step size for gradient descent
     
     navigation_weight: 1.0    # Weight for navigation cost
