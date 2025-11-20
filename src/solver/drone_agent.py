@@ -3,7 +3,7 @@ from lqrax import iLQR
 from jax import vmap, grad, jit, debug
 import jax
 
-class PointAgent(iLQR):
+class DroneAgent(iLQR):
     def __init__(self, dt, x_dim, u_dim, Q, R, collision_weight, collision_scale, ctrl_weight, device):
         self.collision_weight = collision_weight
         self.collision_scale = collision_scale
@@ -13,17 +13,19 @@ class PointAgent(iLQR):
     
     def dyn(self, x, u):
         return jnp.array([
-            x[2],  # dx/dt = vx
-            x[3],  # dy/dt = vy
+            x[3],  # dx/dt = vx
+            x[4],  # dy/dt = vy
+            x[5],  # dz/dt = vz
             u[0],  # dvx/dt = ax
-            u[1]   # dvy/dt = ay
+            u[1],  # dvy/dt = ay
+            u[2] - 9.81  # ddz/dt = az - g
         ])
 
     def create_loss_function_mask(self):
         def runtime_loss(xt, ut, ref_xt, other_states, mask):
-            nav_loss = jnp.sum(jnp.square(xt[:2] - ref_xt[:2]))
+            nav_loss = jnp.sum(jnp.square(xt[:3] - ref_xt[:3]))
 
-            squared_distances = jnp.sum(jnp.square(xt[:2] - other_states[:, :2]), axis=1)
+            squared_distances = jnp.sum(jnp.square(xt[:3] - other_states[:, :3]), axis=1)
             collision_loss = self.collision_weight * jnp.exp(-self.collision_scale * squared_distances)
             # apply mask to collision loss
             collision_loss = collision_loss * mask
@@ -60,9 +62,9 @@ class PointAgent(iLQR):
 
     def create_loss_functions_no_mask(self):
         def runtime_loss(xt, ut, ref_xt, other_states):
-            nav_loss = jnp.sum(jnp.square(xt[:2] - ref_xt[:2]))
+            nav_loss = jnp.sum(jnp.square(xt[:3] - ref_xt[:3]))
 
-            squared_distances = jnp.sum(jnp.square(xt[:2] - other_states[:, :2]), axis=1)
+            squared_distances = jnp.sum(jnp.square(xt[:3] - other_states[:, :3]), axis=1)
             collision_loss = self.collision_weight * jnp.exp(-self.collision_scale * squared_distances)
             collision_loss = jnp.sum(collision_loss)
 

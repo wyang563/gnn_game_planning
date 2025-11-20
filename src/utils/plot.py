@@ -5,8 +5,9 @@ from typing import Optional, Union
 from PIL import Image
 import jax.numpy as jnp
 
+# ============================== Point Agent Plotting Functions ==============================
 
-def plot_trajs(trajs, goals, init_points, ax=None, title: Optional[str] = None, 
+def plot_point_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[str] = None, 
                show_legend: bool = True, save_path: Optional[str] = None):
     """
     Plot trajectories for multiple agents with goals and initial positions.
@@ -87,7 +88,7 @@ def plot_trajs(trajs, goals, init_points, ax=None, title: Optional[str] = None,
     plt.close()
 
 
-def plot_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_agent_id, 
+def plot_point_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_agent_id, 
                    save_path, fps=10, figsize=(12, 10), xlim=None, ylim=None):
     """
     Create a GIF animation showing agent trajectories with mask-based highlighting.
@@ -266,7 +267,7 @@ def plot_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_ag
     print(f"✓ GIF created successfully!")
 
 
-def plot_past_and_predicted_trajectories(x_trajs, dt: float, model=None, 
+def plot_past_and_predicted_point_agent_trajectories(x_trajs, dt: float, model=None, 
                                          ax=None, title: Optional[str] = None,
                                          show_legend: bool = True, 
                                          save_path: Optional[str] = None):
@@ -438,3 +439,13 @@ def plot_past_and_predicted_trajectories(x_trajs, dt: float, model=None,
     
     return fig, ax
 
+# ============================== Drone Agent Plotting Functions ==============================
+
+def plot_drone_agent_trajs():
+    pass
+
+def plot_drone_agent_gif():
+    pass
+
+def plot_past_and_predicted_drone_agent_trajectories():
+    pass

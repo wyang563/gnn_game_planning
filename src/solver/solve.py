@@ -16,9 +16,9 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
     
-from solver.point_agent import PointAgent
 from load_config import load_config, setup_jax_config, get_device_config, ConfigLoader
 from utils.goal_init import origin_init_collision, random_init
+from utils.agent_selection_utils import agent_type_to_agent_class, agent_type_to_state, agent_type_to_Q_R_matrices
 
 def create_loss_functions(agents, mode):
     for agent in agents:
@@ -29,7 +29,7 @@ def create_loss_functions(agents, mode):
 
 # created batched loss functions (this is only for data generation when other x_trajs is the same size dims for all agents)
 def create_batched_loss_functions_mask(agents, device):
-    dummy_agent: PointAgent = agents[0]
+    dummy_agent = agents[0]
     # Define batched functions that work on arrays of agent data
     def batched_linearize_dyn(x0s, u_trajs):
         """Batched version of linearize_dyn for all agents."""
@@ -62,7 +62,7 @@ def create_batched_loss_functions_mask(agents, device):
     return jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss
 
 def create_batched_loss_functions_no_mask(agents, device):
-    dummy_agent: PointAgent = agents[0]
+    dummy_agent = agents[0]
     # Define batched functions that work on arrays of agent data
     def batched_linearize_dyn(x0s, u_trajs):
         """Batched version of linearize_dyn for all agents."""
@@ -94,11 +94,11 @@ def create_batched_loss_functions_no_mask(agents, device):
     jit_batched_loss = jit(batched_loss, device=device)
     return jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss
 
-def create_agent_setup(n_agents, setup_type, x_dim, u_dim, dt, Q, R, tsteps, init_position_range, device, weights):
+def create_agent_setup(n_agents, agent_class, setup_type, x_dim, u_dim, dt, Q, R, tsteps, init_position_range, device, weights):
     if setup_type == "random":
-        init_positions, target_positions = random_init(n_agents, [-init_position_range, init_position_range])
+        init_positions, target_positions = random_init(n_agents, [-init_position_range, init_position_range], dims=x_dim//2)
     elif setup_type == "origin":
-        init_positions, target_positions = origin_init_collision(n_agents, [-init_position_range, init_position_range])
+        init_positions, target_positions = origin_init_collision(n_agents, [-init_position_range, init_position_range], dims=x_dim//2)
 
     agents = []
     initial_states = []
@@ -106,9 +106,11 @@ def create_agent_setup(n_agents, setup_type, x_dim, u_dim, dt, Q, R, tsteps, ini
     collision_weight, collision_scale, ctrl_weight = weights
 
     for i in range(n_agents):
-        agent = PointAgent(dt, x_dim=x_dim, u_dim=u_dim, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=ctrl_weight, device=device)
+        agent = agent_class(dt, x_dim=x_dim, u_dim=u_dim, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=ctrl_weight, device=device)
         agents.append(agent)
-        initial_states.append(jnp.array([init_positions[i][0], init_positions[i][1], 0.0, 0.0])) # [x, y, vx, vy]
+        position = jnp.asarray(init_positions[i])
+        zeros = jnp.zeros((x_dim // 2,), dtype=position.dtype)
+        initial_states.append(jnp.concatenate([position, zeros]))
 
         start_pos = jnp.array(init_positions[i])
         target_pos = jnp.array(target_positions[i])
@@ -220,14 +222,17 @@ def save_trajectory_sample(sample_id: int, n_agents: int, tsteps: int, dt: float
     Returns:
         sample_data: Dictionary containing the trajectory data
     """
+    init_positions_np = np.asarray(init_positions)
+    target_positions_np = np.asarray(target_positions)
+
     sample_data = {
         "sample_id": sample_id,
-        "init_positions": init_positions.tolist(),  # Convert to list for JSON serialization
-        "target_positions": target_positions.tolist(),  # Convert to list for JSON serialization
+        "init_positions": init_positions_np.tolist(),  # Convert to list for JSON serialization
+        "target_positions": target_positions_np.tolist(),  # Convert to list for JSON serialization
         "trajectories": {
             f"agent_{i}": {
-                "states": state_trajectories[i].tolist(),  # (tsteps, state_dim)
-                "controls": control_trajectories[i].tolist()  # (tsteps, control_dim)
+                "states": np.asarray(state_trajectories[i]).tolist(),  # (tsteps, state_dim)
+                "controls": np.asarray(control_trajectories[i]).tolist()  # (tsteps, control_dim)
             }
             for i in range(n_agents)
         },
@@ -312,6 +317,8 @@ if __name__ == "__main__":
     setup_jax_config()
     device = get_device_config()
     print(f"Using device: {device}")
+    print(f"Agent type: {config.game.agent_type}")
+    agent_class = agent_type_to_agent_class(config.game.agent_type)
 
     # Extract parameters from configuration
     dt = config.game.dt
@@ -323,8 +330,7 @@ if __name__ == "__main__":
     # Optimization parameters
     num_iters = config.optimization.num_iters
     step_size = config.optimization.step_size
-    Q = jnp.diag(jnp.array(config.optimization.Q))
-    R = jnp.diag(jnp.array(config.optimization.R))
+    Q, R = agent_type_to_Q_R_matrices(config.game.agent_type)
 
     print(f"Configuration loaded:")
     print(f"  N agents: {n_agents}")
@@ -332,12 +338,11 @@ if __name__ == "__main__":
     print(f"  Optimization: {num_iters} iters, step size: {step_size}")
     print(f"  Boundary size: {boundary_size}")
 
-    x_dim = 4
-    u_dim = 2
+    x_dim, u_dim = agent_type_to_state(config.game.agent_type)
     weights = (config.optimization.collision_weight, config.optimization.collision_scale, config.optimization.control_weight)
 
     # create agent setup
-    agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
+    agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, agent_class, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
     create_loss_functions(agents, "no_mask")
     # state_trajs, control_trajs, total_time = solve_ilqgames_sequential(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size)
     state_trajs, control_trajs, total_time = solve_ilqgames_parallel_no_mask(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)
@@ -345,7 +350,7 @@ if __name__ == "__main__":
 
     sample_data = save_trajectory_sample(
         0, n_agents, tsteps, dt, 
-        jnp.array([initial_states[i][:2] for i in range(n_agents)]),  # Extract positions
+        jnp.array([initial_states[i][:x_dim // 2] for i in range(n_agents)]),  # Extract positions
         target_positions, 
         state_trajs, 
         control_trajs 
@@ -354,7 +359,7 @@ if __name__ == "__main__":
     save_path = "src/solver"
     plot_filename = f"test.png"
     plot_path = os.path.join(save_path, plot_filename)
-    plot_sample_trajectories(sample_data, boundary_size, str(plot_path))
+    plot_sample_trajectories(n_agents, sample_data, boundary_size, str(plot_path))
 
 
     

@@ -25,7 +25,7 @@ from utils.goal_init import random_init
 from models.train_gnn import GNNSelectionNetwork, load_trained_gnn_models
 from models.train_mlp import PlayerSelectionNetwork, load_trained_psn_models
 from tqdm import tqdm
-from utils.plot import plot_trajs, plot_agent_gif
+from utils.plot import plot_point_agent_trajs, plot_point_agent_gif
 # from eval.baselines import nearest_neighbors, jacobian, cost_evolution, barrier_function
 from models.policies import nearest_neighbors_top_k, jacobian_top_k, barrier_function_top_k, cost_evolution_top_k
 
@@ -400,6 +400,6 @@ if __name__ == "__main__":
     plot_save_path = os.path.join(out_dir, "test.png")
     gif_save_path = os.path.join(out_dir, "test.gif")
 
-    # plot_trajs(final_x_trajs, goals, init_ps, save_path=plot_save_path)
-    # plot_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, gif_save_path)
+    # plot_point_agent_trajs(final_x_trajs, goals, init_ps, save_path=plot_save_path)
+    # plot_point_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, gif_save_path)
 

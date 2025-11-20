@@ -9,7 +9,7 @@ src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-from utils.plot import plot_trajs, plot_agent_gif
+from utils.plot import plot_point_agent_trajs, plot_point_agent_gif
 from load_config import load_config, setup_jax_config, get_device_config
 from solver.point_agent import PointAgent
 from models.train_gnn import load_trained_gnn_models
@@ -122,5 +122,5 @@ if __name__ == "__main__":
         mask_mag=mask_mag,
     )
 
-    plot_trajs(final_x_trajs, goals, init_ps, save_path="src/eval/test.png")
-    plot_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, "src/eval/test.gif")
+    plot_point_agent_trajs(final_x_trajs, goals, init_ps, save_path="src/eval/test.png")
+    plot_point_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, "src/eval/test.gif")

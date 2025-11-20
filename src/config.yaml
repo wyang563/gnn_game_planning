@@ -10,6 +10,9 @@ game:
   ego_agent_id: 0           # ID of the ego agent (usually 0)
   
   # State and control dimensions
+  agent_type: "drone"
+
+  # TODO: remove state_dim and control_dim eventually to make it dynamic based on agent_type
   state_dim: 4              # [x, y, vx, vy] for point mass agents
   control_dim: 2            # [ax, ay] for point mass agents
   
@@ -31,6 +34,7 @@ optimization:
   collision_scale: 1.0      # Scale factor in exponential collision cost
   control_weight: 0.1       # Weight for control cost
 
+  # TODO: these need to be dynamic based on agent_type so we'll remove these eventually as well
   # Q, R matrices
   Q: [0.1, 0.1, 0.001, 0.001]
   R: [0.01, 0.01]

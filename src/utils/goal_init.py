@@ -10,7 +10,20 @@ import argparse
 from models.policies import *
 
 def origin_init_collision(n_agents: int, 
-                init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
+                init_position_range: Tuple[float, float],
+                dims: int = 2) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
+    """
+    Generate initial positions and goals for agents where goals are positioned
+    along a line through the origin opposite to the initial position.
+    
+    Args:
+        n_agents: Number of agents
+        init_position_range: Tuple of (min_pos, max_pos) for position bounds
+        dims: Number of dimensions for the positions (e.g., 2 for 2D, 3 for 3D)
+        
+    Returns:
+        Tuple of (initial_positions, goals) where each is a list of jnp.ndarray
+    """
     init_ps = []
     goals = []
     
@@ -27,10 +40,9 @@ def origin_init_collision(n_agents: int,
         # Generate initial position
         init_pos = None
         for _ in range(max_tries):
-            x = random.uniform(min_pos, max_pos)
-            y = random.uniform(min_pos, max_pos)
-            
-            candidate_pos = jnp.array([x, y])
+            # Generate coordinates for all dimensions
+            coords = [random.uniform(min_pos, max_pos) for _ in range(dims)]
+            candidate_pos = jnp.array(coords)
             
             # Check minimum distance from other agents
             too_close = False
@@ -47,40 +59,32 @@ def origin_init_collision(n_agents: int,
         init_ps.append(init_pos)
 
     # 2) For each agent, choose goal along the same line through origin: goal = -c * init
-    #    Pick c > 0 within bounds so that goal stays inside [min_pos, max_pos]^2
+    #    Pick c > 0 within bounds so that goal stays inside [min_pos, max_pos]^dims
     for i in range(n_agents):
-        x0, y0 = float(init_ps[i][0]), float(init_ps[i][1])
+        init_coords = [float(init_ps[i][d]) for d in range(dims)]
 
         # Determine feasible interval for c such that goal = -c * init lies within bounds
         c_lower = 0.0
         c_upper = float('inf')
 
-        # x-dimension constraint
-        if x0 > 0:
-            # -c*x0 in [min_pos, max_pos] => c in [-max_pos/x0, -min_pos/x0]
-            c_lower = max(c_lower, -max_pos / x0)
-            c_upper = min(c_upper, -min_pos / x0)
-        elif x0 < 0:
-            # -c*x0 in [min_pos, max_pos] => c in [-min_pos/x0, -max_pos/x0]
-            c_lower = max(c_lower, -min_pos / x0)
-            c_upper = min(c_upper, -max_pos / x0)
-        # if x0 == 0, no constraint from x
-
-        # y-dimension constraint
-        if y0 > 0:
-            c_lower = max(c_lower, -max_pos / y0)
-            c_upper = min(c_upper, -min_pos / y0)
-        elif y0 < 0:
-            c_lower = max(c_lower, -min_pos / y0)
-            c_upper = min(c_upper, -max_pos / y0)
-        # if y0 == 0, no constraint from y
+        # Constraint for each dimension
+        for coord_val in init_coords:
+            if coord_val > 0:
+                # -c*coord_val in [min_pos, max_pos] => c in [-max_pos/coord_val, -min_pos/coord_val]
+                c_lower = max(c_lower, -max_pos / coord_val)
+                c_upper = min(c_upper, -min_pos / coord_val)
+            elif coord_val < 0:
+                # -c*coord_val in [min_pos, max_pos] => c in [-min_pos/coord_val, -max_pos/coord_val]
+                c_lower = max(c_lower, -min_pos / coord_val)
+                c_upper = min(c_upper, -max_pos / coord_val)
+            # if coord_val == 0, no constraint from this dimension
 
         # Ensure positive and valid interval
         c_lower = max(c_lower, 0.0)
         if not (c_lower < c_upper and c_upper > 0):
             # Fallback: if constraints degenerate, pick c = 1 and clip goal into bounds
             c = 1.0
-            goal = -c * jnp.array([x0, y0])
+            goal = -c * init_ps[i]
             goal = jnp.clip(goal, min_pos, max_pos)
             goals.append(goal)
             continue
@@ -94,7 +98,7 @@ def origin_init_collision(n_agents: int,
             margin = 1e-6
             c = min(max(desired_c, c_lower + margin), c_upper - margin)
 
-            candidate_goal = -c * jnp.array([x0, y0])
+            candidate_goal = -c * init_ps[i]
             
             # Check minimum distance from other goals
             too_close = False
@@ -135,13 +139,15 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 def random_init(n_agents: int, 
-                init_position_range: Tuple[float, float]) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
+                init_position_range: Tuple[float, float],
+                dims: int = 2) -> Tuple[List[jnp.ndarray], List[jnp.ndarray]]:
     """
     Generate random initial positions and goals for agents with minimum distance constraint.
     
     Args:
         n_agents: Number of agents
         init_position_range: Tuple of (min_pos, max_pos) for position bounds
+        dims: Number of dimensions for the positions (e.g., 2 for 2D, 3 for 3D)
         
     Returns:
         Tuple of (initial_positions, goals) where each is a list of jnp.ndarray
@@ -161,10 +167,9 @@ def random_init(n_agents: int,
     for _ in range(n_agents):
         init_pos = None
         for _ in range(max_tries):
-            x = random.uniform(min_pos, max_pos)
-            y = random.uniform(min_pos, max_pos)
-            
-            candidate_pos = jnp.array([x, y])
+            # Generate coordinates for all dimensions
+            coords = [random.uniform(min_pos, max_pos) for _ in range(dims)]
+            candidate_pos = jnp.array(coords)
             
             # Check minimum distance from other agents
             too_close = False
@@ -188,10 +193,9 @@ def random_init(n_agents: int,
     for _ in range(n_agents):
         goal = None
         for _ in range(max_tries):
-            x = random.uniform(min_pos, max_pos)
-            y = random.uniform(min_pos, max_pos)
-            
-            candidate_goal = jnp.array([x, y])
+            # Generate coordinates for all dimensions
+            coords = [random.uniform(min_pos, max_pos) for _ in range(dims)]
+            candidate_goal = jnp.array(coords)
             
             # Check minimum distance from other goals
             too_close = False
