@@ -182,7 +182,9 @@ def solve_by_horizon_sequential(
         agent_horizon_x_traj, _, _ = agents[agent_id].linearize_dyn(horizon_x0s[agent_id], horizon_u_trajs[agent_id])
         final_x_trajs.append(agent_horizon_x_traj)
     final_x_trajs = jnp.stack(final_x_trajs, axis=0)
-    return final_x_trajs, control_trajs, simulation_masks, total_game_theory_optimization_time
+
+    avg_optimization_time = total_game_theory_optimization_time / (tsteps + 1)
+    return final_x_trajs, control_trajs, simulation_masks, avg_optimization_time
 
 # standard parallelized/optimized version of solver
 def solve_by_horizon(
@@ -334,9 +336,9 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(config.optimization.R))
 
     # redefinitions of game parameters to test adapatbility of model 
-    n_agents = 50 
-    tsteps = 200 
-    num_iters = 100
+    n_agents = 10 
+    tsteps = 50 
+    num_iters = 50 
     collision_weight = 5.0
 
     # genera random inits

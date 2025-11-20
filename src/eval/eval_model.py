@@ -147,9 +147,7 @@ def load_dataset(dataset_path: str) -> List[Dict]:
         with open(json_file, 'r') as f:
             data = json.load(f)
             dataset.append(data)
-    
     return dataset
-
 
 def eval_model(
     **kwargs: Any
