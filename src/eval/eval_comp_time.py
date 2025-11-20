@@ -38,18 +38,6 @@ def eval_comp_time(**kwargs: Any) -> None:
     dt = kwargs.get("dt", 0.1)
     eval_num_agents = kwargs.get("eval_num_agents", [5, 10, 20, 50])
 
-    # Load model if provided
-    if model_path is not None:
-        if model_type == "mlp":
-            model, model_state = load_trained_psn_models(model_path, model_type)
-        elif model_type == "gnn":
-            model, model_state = load_trained_gnn_models(model_path, model_type)
-        else:
-            raise ValueError(f"Invalid model type: {model_type}")
-    else:
-        model = None
-        model_state = None
-
     for num_agents in eval_num_agents:
         print(f"Evaluating {num_agents} agents...")
         opt_times_by_method = {"all": [], "gnn": []}
