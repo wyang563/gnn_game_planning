@@ -24,16 +24,18 @@ T_reference = config.game.T_total
 state_dim = config.game.state_dim
 control_dim = config.game.control_dim
 
-# Game solving parameters
-num_iters = config.optimization.num_iters
-step_size = config.optimization.step_size
-collision_weight = config.optimization.collision_weight
-collision_scale = config.optimization.collision_scale
-ctrl_weight = config.optimization.control_weight
+# Game solving parameters - get agent-specific config
+agent_type = config.game.agent_type
+opt_config = getattr(config.optimization, agent_type)
+num_iters = opt_config.num_iters
+step_size = opt_config.step_size
+collision_weight = opt_config.collision_weight
+collision_scale = opt_config.collision_scale
+ctrl_weight = opt_config.control_weight
 device = get_device_config()
 
-Q = jnp.diag(jnp.array(config.optimization.Q))  # State cost weights [x, y, vx, vy]
-R = jnp.diag(jnp.array(config.optimization.R))               # Control cost weights [ax, ay]
+Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights [x, y, vx, vy]
+R = jnp.diag(jnp.array(opt_config.R))               # Control cost weights [ax, ay]
 
 def binary_loss(mask: jnp.ndarray) -> jnp.ndarray:
     """Binary loss: encourages mask values to be close to 0 or 1."""

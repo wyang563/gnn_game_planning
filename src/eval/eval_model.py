@@ -392,14 +392,16 @@ if __name__ == "__main__":
     planning_horizon = config.game.T_receding_horizon_planning
     mask_horizon = config.game.T_observation
 
-    # Optimization parameters
-    num_iters = config.optimization.num_iters
-    step_size = config.optimization.step_size
-    collision_weight = config.optimization.collision_weight
-    collision_scale = config.optimization.collision_scale
-    control_weight = config.optimization.control_weight
-    Q = jnp.diag(jnp.array(config.optimization.Q))
-    R = jnp.diag(jnp.array(config.optimization.R))
+    # Optimization parameters - get agent-specific config
+    agent_type = config.game.agent_type
+    opt_config = getattr(config.optimization, agent_type)
+    num_iters = opt_config.num_iters
+    step_size = opt_config.step_size
+    collision_weight = opt_config.collision_weight
+    collision_scale = opt_config.collision_scale
+    control_weight = opt_config.control_weight
+    Q = jnp.diag(jnp.array(opt_config.Q))
+    R = jnp.diag(jnp.array(opt_config.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
     model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251110_201039/psn_best_model.pkl"

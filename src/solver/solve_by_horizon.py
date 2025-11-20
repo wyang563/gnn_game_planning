@@ -326,14 +326,16 @@ if __name__ == "__main__":
     mask_threshold = config.testing.receding_horizon.mask_threshold
     planning_horizon = config.game.T_receding_horizon_planning
 
-    # Optimization parameters
-    num_iters = config.optimization.num_iters
-    step_size = config.optimization.step_size
-    collision_weight = config.optimization.collision_weight
-    collision_scale = config.optimization.collision_scale
-    control_weight = config.optimization.control_weight
-    Q = jnp.diag(jnp.array(config.optimization.Q))
-    R = jnp.diag(jnp.array(config.optimization.R))
+    # Optimization parameters - get agent-specific config
+    agent_type = config.game.agent_type
+    opt_config = getattr(config.optimization, agent_type)
+    num_iters = opt_config.num_iters
+    step_size = opt_config.step_size
+    collision_weight = opt_config.collision_weight
+    collision_scale = opt_config.collision_scale
+    control_weight = opt_config.control_weight
+    Q = jnp.diag(jnp.array(opt_config.Q))
+    R = jnp.diag(jnp.array(opt_config.R))
 
     # redefinitions of game parameters to test adapatbility of model 
     n_agents = 10 

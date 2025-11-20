@@ -86,11 +86,13 @@ batch_size = config.psn.batch_size
 sigma1 = config.psn.sigma1  # Final mask sparsity weight (will gradually increase from 0)
 sigma2 = config.psn.sigma2  # Binary loss weight   
 
-# Game solving parameters
-num_iters = config.optimization.num_iters
-step_size = config.optimization.step_size
-Q = jnp.diag(jnp.array(config.optimization.Q))  # State cost weights [x, y, vx, vy]
-R = jnp.diag(jnp.array(config.optimization.R))               # Control cost weights [ax, ay]
+# Game solving parameters - get agent-specific config
+agent_type = config.game.agent_type
+opt_config = getattr(config.optimization, agent_type)
+num_iters = opt_config.num_iters
+step_size = opt_config.step_size
+Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights [x, y, vx, vy]
+R = jnp.diag(jnp.array(opt_config.R))               # Control cost weights [ax, ay]
 
 # Reference trajectory parameters - use training data directory for training
 # Use dataset directory for loading individual sample files

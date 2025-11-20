@@ -8,12 +8,14 @@ from solver.solve import create_batched_loss_functions_mask
 # Load configuration
 config = load_config()
 T_total = config.game.T_total
-u_dim = config.game.control_dim
-step_size = config.optimization.step_size
+agent_type = config.game.agent_type
+opt_config = getattr(config.optimization, agent_type)
+u_dim = opt_config.control_dim
+step_size = opt_config.step_size
 ego_agent_id = config.game.ego_agent_id
 dt = config.game.dt
-Q = jnp.diag(jnp.array(config.optimization.Q))  # State cost weights [x, y, vx, vy]
-R = jnp.diag(jnp.array(config.optimization.R))  # Control cost weights [ax, ay]
+Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights [x, y, vx, vy]
+R = jnp.diag(jnp.array(opt_config.R))  # Control cost weights [ax, ay]
 device = get_device_config()
 
 def solve_masked_game_differentiable_parallel(
@@ -91,7 +93,7 @@ def solve_masked_game_differentiable_parallel(
         return new_control_trajs, x_trajs
 
     # Use JAX scan for differentiable iteration (critical for gradient flow!)
-    training_iters = config.optimization.num_iters
+    training_iters = opt_config.num_iters
     final_control_trajs, x_traj_history = jax.lax.scan(
         optimization_step, control_trajs, None, length=training_iters)
     
@@ -153,11 +155,11 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
     initial_controls = jnp.zeros((n_selected, T_total, 2))
     
     # Optimization parameters (following ilqgames_example.py pattern)
-    step_size = config.optimization.step_size  # Conservative step size similar to original
+    step_size = opt_config.step_size  # Conservative step size similar to original
     
     # Use reasonable number of iterations for convergence
-    # training_iters = min(num_iters, config.optimization.num_iters)  # Reasonable iterations for stable convergence
-    training_iters = config.optimization.num_iters
+    # training_iters = min(num_iters, opt_config.num_iters)  # Reasonable iterations for stable convergence
+    training_iters = opt_config.num_iters
     
     def dynamics_function(x, u):
         """Point mass dynamics: [x, y, vx, vy] with controls [ax, ay]"""
@@ -217,13 +219,13 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
                         other_agent_idx = i + 1  # Agent index in the full game
                         if other_agent_idx < len(mask_values):
                             agent_mask_value = mask_values[other_agent_idx]
-                            collision_cost += config.optimization.collision_weight * agent_mask_value * jnp.exp(-config.optimization.collision_scale * distance_squared)
+                            collision_cost += opt_config.collision_weight * agent_mask_value * jnp.exp(-opt_config.collision_scale * distance_squared)
                     else:  # Non-ego agent
                         # For other agents, collision cost is always full (they're always "selected" when in the game)
-                        collision_cost += config.optimization.collision_weight * jnp.exp(-config.optimization.collision_scale * distance_squared)
+                        collision_cost += opt_config.collision_weight * jnp.exp(-opt_config.collision_scale * distance_squared)
             
             # Control cost - simplified without velocity scaling (EXACTLY like reference generation)
-            ctrl_cost = config.optimization.control_weight * jnp.sum(jnp.square(u))
+            ctrl_cost = opt_config.control_weight * jnp.sum(jnp.square(u))
             
             return nav_cost + collision_cost + ctrl_cost
         

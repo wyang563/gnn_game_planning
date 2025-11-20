@@ -101,11 +101,13 @@ if __name__ == "__main__":
     init_type = config.game.initiation_type
     boundary_size = config.get(f"game.boundary_size_{n_agents}p", 3.5)
 
-    # Optimization parameters
-    num_iters = config.optimization.num_iters
-    step_size = config.optimization.step_size
-    Q = jnp.diag(jnp.array(config.optimization.Q))
-    R = jnp.diag(jnp.array(config.optimization.R))
+    # Optimization parameters - get agent-specific config
+    agent_type = config.game.agent_type
+    opt_config = getattr(config.optimization, agent_type)
+    num_iters = opt_config.num_iters
+    step_size = opt_config.step_size
+    Q = jnp.diag(jnp.array(opt_config.Q))
+    R = jnp.diag(jnp.array(opt_config.R))
 
     print(f"Configuration loaded:")
     print(f"  N agents: {n_agents}")
@@ -113,9 +115,9 @@ if __name__ == "__main__":
     print(f"  Optimization: {num_iters} iters, step size: {step_size}")
     print(f"  Boundary size: {boundary_size}")
 
-    x_dim = 4
-    u_dim = 2
-    weights = (config.optimization.collision_weight, config.optimization.collision_scale, config.optimization.control_weight)
+    x_dim = opt_config.state_dim
+    u_dim = opt_config.control_dim
+    weights = (opt_config.collision_weight, opt_config.collision_scale, opt_config.control_weight)
 
     # create output directory
     gen_type = config.reference_generation.reference_gen_type

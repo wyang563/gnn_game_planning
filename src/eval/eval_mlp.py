@@ -202,9 +202,11 @@ T_observation = config.game.T_observation  # Number of steps to observe before s
 n_agents = config.game.N_agents
 ego_agent_id = config.game.ego_agent_id
 
-# Optimization parameters
-num_iters = config.optimization.num_iters
-step_size = config.optimization.step_size
+# Optimization parameters - get agent-specific config
+agent_type = config.game.agent_type
+opt_config = getattr(config.optimization, agent_type)
+num_iters = opt_config.num_iters
+step_size = opt_config.step_size
 
 print(f"Configuration loaded:")
 print(f"  N agents: {n_agents}")
@@ -305,8 +307,10 @@ def compute_planning_metrics(ego_trajectory: jnp.ndarray,
     navigation_cost = jnp.sum(navigation_errors) * dt
     
     # Safety cost: collision avoidance with other agents
-    collision_weight = config.optimization.collision_weight
-    collision_scale = config.optimization.collision_scale
+    agent_type = config.game.agent_type
+    opt_config = getattr(config.optimization, agent_type)
+    collision_weight = opt_config.collision_weight
+    collision_scale = opt_config.collision_scale
     safety_cost = 0.0
     
     for other_traj in other_trajectories:
@@ -318,7 +322,7 @@ def compute_planning_metrics(ego_trajectory: jnp.ndarray,
             safety_cost += jnp.sum(safety_penalties) * dt
     
     # Control cost: control effort
-    ctrl_weight = config.optimization.control_weight
+    ctrl_weight = opt_config.control_weight
     control_magnitudes = jnp.linalg.norm(ego_controls, axis=1)
     control_cost = ctrl_weight * jnp.sum(control_magnitudes) * dt
     
@@ -517,9 +521,11 @@ def create_loss_functions(agents: list, reference_trajectories: list) -> tuple:
                 # Navigation cost - track reference trajectory (exactly like reference generation)
                 nav_loss = jnp.sum(jnp.square(xt[:2] - ref_xt[:2]))
                 
-                collision_weight = config.optimization.collision_weight
-                collision_scale = config.optimization.collision_scale
-                ctrl_weight = config.optimization.control_weight
+                agent_type = config.game.agent_type
+                opt_config = getattr(config.optimization, agent_type)
+                collision_weight = opt_config.collision_weight
+                collision_scale = opt_config.collision_scale
+                ctrl_weight = opt_config.control_weight
                 
                 # Collision avoidance costs - exponential penalty for proximity to other agents
                 # (exactly like reference generation)

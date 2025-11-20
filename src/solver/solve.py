@@ -16,9 +16,25 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
     
-from load_config import load_config, setup_jax_config, get_device_config, ConfigLoader
-from utils.goal_init import origin_init_collision, random_init
-from utils.agent_selection_utils import agent_type_to_agent_class, agent_type_to_state, agent_type_to_Q_R_matrices
+from load_config import (
+    load_config,
+    setup_jax_config,
+    get_device_config,
+    ConfigLoader,
+)
+
+from utils.goal_init import (
+    origin_init_collision,
+    random_init,
+)
+
+from utils.agent_selection_utils import (
+    agent_type_to_agent_class,
+    agent_type_to_state,
+    agent_type_to_Q_R_matrices,
+    agent_type_to_plot_functions,
+    agent_type_to_optimization_weights,
+)
 
 def create_loss_functions(agents, mode):
     for agent in agents:
@@ -327,10 +343,13 @@ if __name__ == "__main__":
     init_type = config.game.initiation_type
     boundary_size = config.get(f"game.boundary_size_{n_agents}p", 3.5)
 
-    # Optimization parameters
-    num_iters = config.optimization.num_iters
-    step_size = config.optimization.step_size
-    Q, R = agent_type_to_Q_R_matrices(config.game.agent_type)
+    # Optimization parameters - get agent-specific config
+    agent_type = config.game.agent_type
+    opt_config = getattr(config.optimization, agent_type)
+    num_iters = opt_config.num_iters
+    step_size = opt_config.step_size
+    Q = jnp.diag(jnp.array(opt_config.Q))
+    R = jnp.diag(jnp.array(opt_config.R))
 
     print(f"Configuration loaded:")
     print(f"  N agents: {n_agents}")
@@ -338,8 +357,8 @@ if __name__ == "__main__":
     print(f"  Optimization: {num_iters} iters, step size: {step_size}")
     print(f"  Boundary size: {boundary_size}")
 
-    x_dim, u_dim = agent_type_to_state(config.game.agent_type)
-    weights = (config.optimization.collision_weight, config.optimization.collision_scale, config.optimization.control_weight)
+    x_dim, u_dim = opt_config.state_dim, opt_config.control_dim
+    weights = (opt_config.collision_weight, opt_config.collision_scale, opt_config.control_weight)
 
     # create agent setup
     agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, agent_class, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
@@ -348,18 +367,10 @@ if __name__ == "__main__":
     state_trajs, control_trajs, total_time = solve_ilqgames_parallel_no_mask(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)
     print(f"Total solve time: {total_time}")
 
-    sample_data = save_trajectory_sample(
-        0, n_agents, tsteps, dt, 
-        jnp.array([initial_states[i][:x_dim // 2] for i in range(n_agents)]),  # Extract positions
-        target_positions, 
-        state_trajs, 
-        control_trajs 
-    )
+    # get plot functions
+    agent_plot_functions = agent_type_to_plot_functions(config.game.agent_type)
+    agent_plot_functions["plot_traj"](state_trajs, target_positions, initial_states, save_path="src/solver/test.png")
 
-    save_path = "src/solver"
-    plot_filename = f"test.png"
-    plot_path = os.path.join(save_path, plot_filename)
-    plot_sample_trajectories(n_agents, sample_data, boundary_size, str(plot_path))
 
 
     

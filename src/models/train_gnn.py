@@ -72,11 +72,13 @@ gru_hidden_size = config.gnn.gru_hidden_size
 message_mlp_dims = config.gnn.message_mlp_dims
 influence_head_dims = config.gnn.influence_head_dims
 
-# Game solving parameters
-num_iters = config.optimization.num_iters
-step_size = config.optimization.step_size
-Q = jnp.diag(jnp.array(config.optimization.Q))  # State cost weights [x, y, vx, vy]
-R = jnp.diag(jnp.array(config.optimization.R))               # Control cost weights [ax, ay]
+# Game solving parameters - get agent-specific config
+agent_type = config.game.agent_type
+opt_config = getattr(config.optimization, agent_type)
+num_iters = opt_config.num_iters
+step_size = opt_config.step_size
+Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights [x, y, vx, vy]
+R = jnp.diag(jnp.array(opt_config.R))               # Control cost weights [ax, ay]
 
 # Reference trajectory parameters - use training data directory for training
 # Use dataset directory for loading individual sample files
@@ -274,8 +276,10 @@ class GNNSelectionNetwork(nn.Module):
 
         elif self.edge_metric == "jacobian":
             x_transposed = jnp.transpose(x, (0, 2, 1, 3))  # (batch_size, n_agents, T, state_dim)
-            w1 = config.optimization.collision_weight
-            w2 = config.optimization.collision_scale
+            agent_type = config.game.agent_type
+            opt_config = getattr(config.optimization, agent_type)
+            w1 = opt_config.collision_weight
+            w2 = opt_config.collision_scale
             batched_jacobian = jax.vmap(
                 lambda x_single: jacobian_top_k(x_single, top_k=self.edge_metric_top_k, dt=dt, w1=w1, w2=w2),
                 in_axes=0  # vmap over the first axis (batch dimension)

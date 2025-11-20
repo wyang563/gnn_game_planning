@@ -9,6 +9,7 @@ class DroneAgent(iLQR):
         self.collision_scale = collision_scale
         self.ctrl_weight = ctrl_weight
         self.device = device
+        self.g = 9.81
         super().__init__(dt, x_dim, u_dim, Q, R)
     
     def dyn(self, x, u):
@@ -18,7 +19,7 @@ class DroneAgent(iLQR):
             x[5],  # dz/dt = vz
             u[0],  # dvx/dt = ax
             u[1],  # dvy/dt = ay
-            u[2] - 9.81  # ddz/dt = az - g
+            u[2] - self.g   # ddz/dt = az
         ])
 
     def create_loss_function_mask(self):

@@ -24,20 +24,37 @@ game:
   initiation_type: "random" # ["random", "origin"]
 
 optimization:
-  # iLQGames solver parameters
-  num_iters: 50            # Number of iterations for iLQGames solver  
-  step_size: 0.005          # Step size for gradient descent
-  
-  # Cost function weights
-  navigation_weight: 1.0    # Weight for navigation cost
-  collision_weight: 2.0    # Weight for collision avoidance
-  collision_scale: 1.0      # Scale factor in exponential collision cost
-  control_weight: 0.1       # Weight for control cost
+  point:
+    # iLQGames solver parameters
+    num_iters: 50            # Number of iterations for iLQGames solver  
+    step_size: 0.005          # Step size for gradient descent
+    
+    navigation_weight: 1.0    # Weight for navigation cost
+    collision_weight: 2.0     # Weight for collision avoidance
+    collision_scale: 1.0      # Scale factor in exponential collision cost
+    control_weight: 0.1       # Weight for control cost
 
-  # TODO: these need to be dynamic based on agent_type so we'll remove these eventually as well
-  # Q, R matrices
-  Q: [0.1, 0.1, 0.001, 0.001]
-  R: [0.01, 0.01]
+    Q: [0.1, 0.1, 0.001, 0.001]
+    R: [0.01, 0.01]
+
+    state_dim: 4
+    control_dim: 2
+  
+  drone:
+    # iLQGames solver parameters
+    num_iters: 50            # Number of iterations for iLQGames solver  
+    step_size: 0.005          # Step size for gradient descent
+    
+    navigation_weight: 1.0    # Weight for navigation cost
+    collision_weight: 2.0     # Weight for collision avoidance
+    collision_scale: 1.0      # Scale factor in exponential collision cost
+    control_weight: 0.001       # Weight for control cost
+
+    Q: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    R: [0.01, 0.01, 0.01]
+
+    state_dim: 6
+    control_dim: 3
 
 reference_generation:
   num_samples: 1000

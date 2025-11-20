@@ -12,15 +12,6 @@ def agent_type_to_state(agent_type: str):
         case _:
             raise ValueError("unknown agent type")
 
-def agent_type_to_Q_R_matrices(agent_type: str):
-    match agent_type:
-        case "point":
-            return jnp.diag(jnp.array([0.1, 0.1, 0.001, 0.001])), jnp.diag(jnp.array([0.01, 0.01]))
-        case "drone":
-            return jnp.diag(jnp.array([0.1, 0.1, 0.1, 0.001, 0.001, 0.001])), jnp.diag(jnp.array([0.01, 0.01, 0.01]))
-        case _:
-            raise ValueError("unknown agent type")
-
 def agent_type_to_agent_class(agent_type: str):
     match agent_type:
         case "point":
@@ -33,8 +24,8 @@ def agent_type_to_agent_class(agent_type: str):
 def agent_type_to_plot_functions(agent_type: str):
     match agent_type:
         case "point":
-            return plot_point_agent_trajs, plot_point_agent_gif, plot_past_and_predicted_point_agent_trajectories
+            return {"plot_traj": plot_point_agent_trajs, "plot_gif": plot_point_agent_gif, "plot_past_and_predicted_traj": plot_past_and_predicted_point_agent_trajectories}
         case "drone":
-            return plot_drone_agent_trajs, plot_drone_agent_gif, plot_past_and_predicted_drone_agent_trajectories
+            return {"plot_traj": plot_drone_agent_trajs, "plot_gif": plot_drone_agent_gif, "plot_past_and_predicted_traj": plot_past_and_predicted_drone_agent_trajectories}
         case _:
             raise ValueError("unknown agent type")

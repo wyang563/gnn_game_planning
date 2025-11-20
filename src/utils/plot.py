@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.animation as animation
 import numpy as np
 from typing import Optional, Union
@@ -441,8 +442,118 @@ def plot_past_and_predicted_point_agent_trajectories(x_trajs, dt: float, model=N
 
 # ============================== Drone Agent Plotting Functions ==============================
 
-def plot_drone_agent_trajs():
-    pass
+def plot_drone_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[str] = None, 
+               show_legend: bool = True, save_path: Optional[str] = None):
+    """
+    Plot trajectories for multiple drone agents with goals and initial positions in 3D.
+    
+    Args:
+        trajs: Array of shape (n_agents, n_timesteps, 3) or (n_agents, n_timesteps, 6+)
+               containing the trajectories (x, y, z positions, possibly with velocities)
+        goals: Array of shape (n_agents, 3) containing goal positions for each agent
+        init_points: Array of shape (n_agents, 3) containing initial positions for each agent
+        ax: Optional matplotlib 3D axis to plot on. If None, creates a new figure with 3D projection
+        title: Optional title for the plot
+        show_legend: Whether to show the legend (default: True)
+        save_path: Optional file path to save the plot. If provided, saves the figure
+    
+    Returns:
+        fig, ax: matplotlib figure and axis objects
+    """
+    # Convert to numpy arrays if needed
+    trajs = np.array(trajs)
+    goals = np.array(goals)
+    init_points = np.array(init_points)
+    
+    # Extract position data (first 3 columns if state includes velocity)
+    if trajs.shape[-1] > 3:
+        positions = trajs[:, :, :3]
+    else:
+        positions = trajs
+    
+    # Create figure if not provided
+    if ax is None:
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+    else:
+        fig = ax.get_figure()
+    
+    n_agents = positions.shape[0]
+    
+    # Get colors for each agent using tab10 colormap
+    colors = plt.cm.tab10(np.linspace(0, 1, n_agents))
+    
+    # Plot each agent's trajectory
+    for i in range(n_agents):
+        color = colors[i]
+        
+        # Plot trajectory
+        ax.plot(positions[i, :, 0], positions[i, :, 1], positions[i, :, 2],
+                color=color, linewidth=2, alpha=0.8, label=f'Agent {i}')
+        
+        # Plot initial position (circle)
+        ax.scatter(init_points[i, 0], init_points[i, 1], init_points[i, 2],
+                   color=color, s=120, marker='o', edgecolors='black', 
+                   linewidth=2, zorder=5)
+        
+        # Plot goal (star)
+        ax.scatter(goals[i, 0], goals[i, 1], goals[i, 2],
+                   color=color, s=200, marker='*', edgecolors='black',
+                   linewidth=2, zorder=5)
+    
+    # Set plot properties
+    ax.set_xlabel('X Position (m)', fontsize=12)
+    ax.set_ylabel('Y Position (m)', fontsize=12)
+    ax.set_zlabel('Z Position (m)', fontsize=12)
+    
+    if title:
+        ax.set_title(title, fontsize=14)
+    else:
+        ax.set_title(f'Drone Agent Trajectories (N={n_agents})', fontsize=14)
+    
+    if show_legend:
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    
+    # Set equal aspect ratio for 3D plot
+    # Get the limits for each axis
+    all_x = np.concatenate([
+        positions[:, :, 0].flatten(),
+        goals[:, 0],
+        init_points[:, 0]
+    ])
+    all_y = np.concatenate([
+        positions[:, :, 1].flatten(),
+        goals[:, 1],
+        init_points[:, 1]
+    ])
+    all_z = np.concatenate([
+        positions[:, :, 2].flatten(),
+        goals[:, 2],
+        init_points[:, 2]
+    ])
+    
+    # Calculate ranges
+    x_range = all_x.max() - all_x.min()
+    y_range = all_y.max() - all_y.min()
+    z_range = all_z.max() - all_z.min()
+    max_range = max(x_range, y_range, z_range)
+    
+    # Center the plot
+    x_center = (all_x.max() + all_x.min()) / 2
+    y_center = (all_y.max() + all_y.min()) / 2
+    z_center = (all_z.max() + all_z.min()) / 2
+    
+    # Set limits with equal aspect ratio
+    ax.set_xlim(x_center - max_range/2, x_center + max_range/2)
+    ax.set_ylim(y_center - max_range/2, y_center + max_range/2)
+    ax.set_zlim(z_center - max_range/2, z_center + max_range/2)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    
+    plt.close()
 
 def plot_drone_agent_gif():
     pass
