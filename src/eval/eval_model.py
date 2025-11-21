@@ -171,6 +171,8 @@ def eval_model(
     u_dim = kwargs.get("u_dim", 2)
     x_dim = kwargs.get("x_dim", 4)
     dt = kwargs.get("dt", 0.1)
+    top_k_mask = kwargs.get("top_k_mask", 3)
+    pos_dim = kwargs.get("pos_dim", 2)
 
     # Load dataset
     print(f"Loading dataset from {dataset_path}...")
@@ -252,6 +254,8 @@ def eval_model(
             collision_weight=collision_weight,
             collision_scale=collision_scale,
             disable_tqdm=True,
+            top_k_mask=top_k_mask,
+            pos_dim=pos_dim,
         )
 
         for method in methods:
@@ -291,6 +295,8 @@ def eval_model(
                     collision_weight=collision_weight,
                     collision_scale=collision_scale,
                     disable_tqdm=True,
+                    top_k_mask=top_k_mask,
+                    pos_dim=pos_dim,
                 )
                 
                 # Compute metrics
@@ -404,9 +410,10 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(opt_config.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251110_201039/psn_best_model.pkl"
+    model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_epochs_50_loss_type_ego_agent_cost/20251110_201139/psn_best_model.pkl"
     model_type = "gnn"  
     dataset_path = "src/data/eval_data_upto_20p"
+    top_k_mask = 2
 
     args = {
         "model_path": model_path,
@@ -428,6 +435,8 @@ if __name__ == "__main__":
         "u_dim": opt_config.control_dim,
         "x_dim": opt_config.state_dim,
         "dt": dt, 
+        "top_k_mask": top_k_mask,
+        "pos_dim": opt_config.state_dim // 2,
     }
 
     eval_model(**args)

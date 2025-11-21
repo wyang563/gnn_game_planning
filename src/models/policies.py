@@ -1,8 +1,8 @@
 import jax.numpy as jnp
 
-def nearest_neighbors_top_k(past_x_trajs: jnp.ndarray, top_k: int) -> jnp.ndarray:
+def nearest_neighbors_top_k(past_x_trajs: jnp.ndarray, top_k: int, pos_dim: int = 2) -> jnp.ndarray:
     n_agents = past_x_trajs.shape[0]
-    latest_positions = past_x_trajs[:, -1, :2]
+    latest_positions = past_x_trajs[:, -1, :pos_dim]
     diff = latest_positions[:, None, :] - latest_positions[None, :, :]
     squared_distances = jnp.sum(diff * diff, axis=2)
 
@@ -25,9 +25,10 @@ def jacobian_top_k(
     dt: float,
     w1: float,
     w2: float,
+    pos_dim: int = 2,
 ) -> jnp.ndarray:
     N, T, _ = past_x_trajs.shape
-    P = past_x_trajs[..., :2]
+    P = past_x_trajs[..., :pos_dim]
     
     # calculate gradient relative to position of agent j (pj)
     delta = P[None, :, :] - P[:, None, :]
@@ -60,9 +61,9 @@ def jacobian_top_k(
     
     return mask
 
-def nearest_neighbors_radius(past_x_trajs: jnp.ndarray, critical_radius: float) -> jnp.ndarray:
+def nearest_neighbors_radius(past_x_trajs: jnp.ndarray, critical_radius: float, pos_dim: int = 2) -> jnp.ndarray:
     n_agents = past_x_trajs.shape[0]
-    latest_positions = past_x_trajs[:, -1, :2]  
+    latest_positions = past_x_trajs[:, -1, :pos_dim]  
     diff = latest_positions[:, None, :] - latest_positions[None, :, :]
     distances = jnp.sqrt(jnp.sum(diff * diff, axis=2))
     within_radius_mask = distances <= critical_radius
@@ -76,6 +77,7 @@ def cost_evolution_top_k(
     top_k: int,
     w1: float = 2.0, # default weight setting for collision weight
     w2: float = 1.0, # default weight setting for collision scale
+    pos_dim: int = 2,
 ) -> jnp.ndarray:
     N, T, _ = past_x_trajs.shape
     
@@ -84,12 +86,12 @@ def cost_evolution_top_k(
         return jnp.zeros((N, N), dtype=jnp.int32)
     
     # Compute pairwise distance at current time (last timestep)
-    pos_current = past_x_trajs[:, -1, :2]  # Shape: (N, 2)
-    pos_diff = pos_current[:, None, :] - pos_current[None, :, :]  # Shape: (N, N, 2)
+    pos_current = past_x_trajs[:, -1, :pos_dim]  # Shape: (N, pos_dim)
+    pos_diff = pos_current[:, None, :] - pos_current[None, :, :]  # Shape: (N, N, pos_dim)
     D = jnp.sum(pos_diff**2, axis=-1)  # Shape: (N, N)
     
     # Compute pairwise distance at previous time (second-to-last timestep)
-    pos_prev = past_x_trajs[:, -2, :2]  # Shape: (N, 2)
+    pos_prev = past_x_trajs[:, -2, :pos_dim]  # Shape: (N, pos_dim)
     pos_diff_prev = pos_prev[:, None, :] - pos_prev[None, :, :]  # Shape: (N, N, 2)
     D_prev = jnp.sum(pos_diff_prev**2, axis=-1)  # Shape: (N, N)
     
@@ -116,12 +118,13 @@ def barrier_function_top_k(
     top_k: int,
     R: float = 0.5,
     kappa: float = 5.0,
+    pos_dim: int = 2,
 ) -> jnp.ndarray:
     N = past_x_trajs.shape[0]
     
     # Extract positions and velocities at the last time step
-    positions = past_x_trajs[:, -1, :2]  
-    velocities = past_x_trajs[:, -1, 2:4]
+    positions = past_x_trajs[:, -1, :pos_dim]  
+    velocities = past_x_trajs[:, -1, pos_dim:pos_dim*2]
     
     # Calculate pairwise position differences: pos[i] - pos[j]
     pos_diff = positions[:, None, :] - positions[None, :, :]  # Shape: (N, N, 2)

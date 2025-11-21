@@ -46,7 +46,7 @@ optimization:
     step_size: 0.005          # Step size for gradient descent
     
     navigation_weight: 1.0    # Weight for navigation cost
-    collision_weight: 2.0     # Weight for collision avoidance
+    collision_weight: 10.0     # Weight for collision avoidance
     collision_scale: 1.0      # Scale factor in exponential collision cost
     control_weight: 0.001       # Weight for control cost
 
@@ -298,7 +298,7 @@ debug:
 # ============================================================================
 device:
   # Device selection
-  preferred_device: "gpu"   # Preferred device ["gpu", "cpu", "auto"]
+  preferred_device: "cpu"   # Preferred device ["gpu", "cpu", "auto"]
   
   # JAX configuration
   jax_platform_name: null  # JAX platform name (null = auto-detect)

@@ -337,6 +337,7 @@ if __name__ == "__main__":
     dt = config.game.dt
     tsteps = config.game.T_total
     n_agents = config.game.N_agents
+    n_agents = 10
     init_type = config.game.initiation_type
     boundary_size = config.get(f"game.boundary_size_{n_agents}p", 3.5)
 
@@ -367,6 +368,7 @@ if __name__ == "__main__":
     # get plot functions
     agent_plot_functions = agent_type_to_plot_functions(config.game.agent_type)
     agent_plot_functions["plot_traj"](state_trajs, target_positions, initial_states, save_path="src/solver/test.png")
+    agent_plot_functions["plot_traj_gif"](state_trajs, target_positions, initial_states, save_path="src/solver/test.gif")
 
 
 

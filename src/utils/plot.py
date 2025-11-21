@@ -45,8 +45,9 @@ def plot_point_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[s
     
     n_agents = positions.shape[0]
     
-    # Get colors for each agent using tab10 colormap
-    colors = plt.cm.tab10(np.linspace(0, 1, n_agents))
+    # Get colors for each agent using a colormap that supports many colors
+    # Use hsv colormap which cycles through colors and gives good distinction
+    colors = plt.cm.hsv(np.linspace(0, 1, n_agents))
     
     # Plot each agent's trajectory
     for i in range(n_agents):
@@ -56,15 +57,29 @@ def plot_point_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[s
         ax.plot(positions[i, :, 0], positions[i, :, 1], 
                 color=color, linewidth=2, alpha=0.8, label=f'Agent {i}')
         
-        # Plot initial position (circle)
+        # Plot initial position (circle) with label
+        start_label = f'Start {i}' if i == 0 else ''
         ax.scatter(init_points[i, 0], init_points[i, 1], 
                    color=color, s=120, marker='o', edgecolors='black', 
-                   linewidth=2, zorder=5)
+                   linewidth=2, zorder=5, label=start_label)
         
-        # Plot goal (star)
+        # Add text label for start point
+        ax.text(init_points[i, 0], init_points[i, 1], f' {i}', 
+                fontsize=9, ha='left', va='bottom', 
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='black', linewidth=0.5),
+                zorder=6)
+        
+        # Plot goal (star) with label
+        goal_label = f'Goal {i}' if i == 0 else ''
         ax.scatter(goals[i, 0], goals[i, 1], 
                    color=color, s=200, marker='*', edgecolors='black',
-                   linewidth=2, zorder=5)
+                   linewidth=2, zorder=5, label=goal_label)
+        
+        # Add text label for goal point
+        ax.text(goals[i, 0], goals[i, 1], f' {i}', 
+                fontsize=9, ha='left', va='bottom',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='black', linewidth=0.5),
+                zorder=6)
     
     # Set plot properties
     ax.set_xlabel('X Position (m)', fontsize=12)
@@ -88,6 +103,10 @@ def plot_point_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[s
     
     plt.close()
 
+
+def plot_point_agent_trajs_gif(trajs, goals, init_points, ax=None, title: Optional[str] = None, 
+               show_legend: bool = True, save_path: Optional[str] = None):
+    pass
 
 def plot_point_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_agent_id, 
                    save_path, fps=10, figsize=(12, 10), xlim=None, ylim=None):
@@ -480,8 +499,9 @@ def plot_drone_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[s
     
     n_agents = positions.shape[0]
     
-    # Get colors for each agent using tab10 colormap
-    colors = plt.cm.tab10(np.linspace(0, 1, n_agents))
+    # Get colors for each agent using a colormap that supports many colors
+    # Use hsv colormap which cycles through colors and gives good distinction
+    colors = plt.cm.hsv(np.linspace(0, 1, n_agents))
     
     # Plot each agent's trajectory
     for i in range(n_agents):
@@ -491,15 +511,27 @@ def plot_drone_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[s
         ax.plot(positions[i, :, 0], positions[i, :, 1], positions[i, :, 2],
                 color=color, linewidth=2, alpha=0.8, label=f'Agent {i}')
         
-        # Plot initial position (circle)
+        # Plot initial position (circle) with label
+        start_label = f'Start {i}' if i == 0 else ''
         ax.scatter(init_points[i, 0], init_points[i, 1], init_points[i, 2],
                    color=color, s=120, marker='o', edgecolors='black', 
-                   linewidth=2, zorder=5)
+                   linewidth=2, zorder=5, label=start_label)
         
-        # Plot goal (star)
+        # Add text label for start point
+        ax.text(init_points[i, 0], init_points[i, 1], init_points[i, 2], f' {i}', 
+                fontsize=9, ha='left', va='bottom',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='black', linewidth=0.5))
+        
+        # Plot goal (star) with label
+        goal_label = f'Goal {i}' if i == 0 else ''
         ax.scatter(goals[i, 0], goals[i, 1], goals[i, 2],
                    color=color, s=200, marker='*', edgecolors='black',
-                   linewidth=2, zorder=5)
+                   linewidth=2, zorder=5, label=goal_label)
+        
+        # Add text label for goal point
+        ax.text(goals[i, 0], goals[i, 1], goals[i, 2], f' {i}', 
+                fontsize=9, ha='left', va='bottom',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, edgecolor='black', linewidth=0.5))
     
     # Set plot properties
     ax.set_xlabel('X Position (m)', fontsize=12)
@@ -554,6 +586,166 @@ def plot_drone_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[s
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
     
     plt.close()
+
+def plot_drone_agent_trajs_gif(trajs, goals, init_points, save_path: str, 
+                               fps: int = 10, figsize: tuple = (12, 10), 
+                               title: Optional[str] = None):
+    """
+    Create a GIF animation showing drone agent trajectories gradually traced out over time.
+    
+    Args:
+        trajs: Array of shape (n_agents, n_timesteps, 3) or (n_agents, n_timesteps, 6+)
+               containing the trajectories (x, y, z positions, possibly with velocities)
+        goals: Array of shape (n_agents, 3) containing goal positions for each agent
+        init_points: Array of shape (n_agents, 3) containing initial positions for each agent
+        save_path: str, path to save the GIF file (required)
+        fps: int, frames per second for the GIF (default: 10)
+        figsize: tuple, figure size (default: (12, 10))
+        title: Optional title for the plot
+    """
+    # Convert to numpy arrays if needed
+    trajs = np.array(trajs)
+    goals = np.array(goals)
+    init_points = np.array(init_points)
+    
+    # Extract position data (first 3 columns if state includes velocity)
+    if trajs.shape[-1] > 3:
+        positions = trajs[:, :, :3]
+    else:
+        positions = trajs
+    
+    n_agents, n_timesteps, _ = positions.shape
+    
+    # Auto-calculate axis limits
+    all_x = np.concatenate([
+        positions[:, :, 0].flatten(),
+        goals[:, 0],
+        init_points[:, 0]
+    ])
+    all_y = np.concatenate([
+        positions[:, :, 1].flatten(),
+        goals[:, 1],
+        init_points[:, 1]
+    ])
+    all_z = np.concatenate([
+        positions[:, :, 2].flatten(),
+        goals[:, 2],
+        init_points[:, 2]
+    ])
+    
+    # Calculate ranges with padding (15% of the range)
+    x_min, x_max = all_x.min(), all_x.max()
+    y_min, y_max = all_y.min(), all_y.max()
+    z_min, z_max = all_z.min(), all_z.max()
+    
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    z_range = z_max - z_min
+    
+    x_padding = max(0.15 * x_range, 0.5)
+    y_padding = max(0.15 * y_range, 0.5)
+    z_padding = max(0.15 * z_range, 0.5)
+    
+    xlim = (x_min - x_padding, x_max + x_padding)
+    ylim = (y_min - y_padding, y_max + y_padding)
+    zlim = (z_min - z_padding, z_max + z_padding)
+    
+    # Get colors for each agent using hsv colormap
+    colors = plt.cm.hsv(np.linspace(0, 1, n_agents))
+    
+    print(f"Creating GIF with {n_timesteps} frames...")
+    
+    # Generate all frames
+    frames = []
+    for step in range(n_timesteps):
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Set axis limits
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_zlim(zlim)
+        
+        # Title
+        if title:
+            ax.set_title(f'{title} - Step {step+1}/{n_timesteps}', fontsize=12, fontweight='bold')
+        else:
+            ax.set_title(f'Drone Agent Trajectories - Step {step+1}/{n_timesteps}', 
+                        fontsize=12, fontweight='bold')
+        ax.set_xlabel('X Position (m)', fontsize=10)
+        ax.set_ylabel('Y Position (m)', fontsize=10)
+        ax.set_zlabel('Z Position (m)', fontsize=10)
+        
+        # Plot trajectories for all agents (gradually accumulated up to current step)
+        for i in range(n_agents):
+            color = colors[i]
+            # Only plot trajectory up to current step
+            traj = positions[i, :step+1, :]
+            
+            if len(traj) > 1:
+                ax.plot(traj[:, 0], traj[:, 1], traj[:, 2],
+                       color=color, linewidth=2, alpha=0.8, label=f'Agent {i}')
+        
+        # Plot current positions
+        for i in range(n_agents):
+            color = colors[i]
+            current_pos = positions[i, step, :]
+            
+            # Plot current position as a circle
+            ax.scatter(current_pos[0], current_pos[1], current_pos[2],
+                      color=color, s=100, marker='o', edgecolors='black',
+                      linewidth=2, alpha=0.9, zorder=5)
+        
+        # Plot start points (initial positions)
+        for i in range(n_agents):
+            color = colors[i]
+            ax.scatter(init_points[i, 0], init_points[i, 1], init_points[i, 2],
+                      color=color, s=120, marker='o', edgecolors='black',
+                      linewidth=2, alpha=0.8, zorder=5)
+            
+            # Add text label for start point
+            ax.text(init_points[i, 0], init_points[i, 1], init_points[i, 2], f' {i}',
+                   fontsize=9, ha='left', va='bottom',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, 
+                            edgecolor='black', linewidth=0.5))
+        
+        # Plot goal points
+        for i in range(n_agents):
+            color = colors[i]
+            ax.scatter(goals[i, 0], goals[i, 1], goals[i, 2],
+                      color=color, s=200, marker='*', edgecolors='black',
+                      linewidth=2, alpha=0.8, zorder=5)
+            
+            # Add text label for goal point
+            ax.text(goals[i, 0], goals[i, 1], goals[i, 2], f' {i}',
+                   fontsize=9, ha='left', va='bottom',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, 
+                            edgecolor='black', linewidth=0.5))
+        
+        plt.tight_layout()
+        
+        # Convert to PIL Image
+        fig.canvas.draw()
+        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+        buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+        img = Image.fromarray(buf, 'RGBA')
+        
+        frames.append(img)
+        plt.close(fig)
+        
+        if (step + 1) % 10 == 0 or step == n_timesteps - 1:
+            print(f"  Generated frame {step + 1}/{n_timesteps}")
+    
+    # Save as GIF
+    print(f"Saving GIF to: {save_path}")
+    frames[0].save(
+        save_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=1000//fps,  # Convert fps to duration in ms
+        loop=0
+    )
+    print(f"✓ GIF created successfully!")
 
 def plot_drone_agent_gif():
     pass

@@ -28,6 +28,7 @@ from tqdm import tqdm
 from utils.plot import plot_point_agent_trajs, plot_point_agent_gif
 # from eval.baselines import nearest_neighbors, jacobian, cost_evolution, barrier_function
 from models.policies import nearest_neighbors_top_k, jacobian_top_k, barrier_function_top_k, cost_evolution_top_k
+from utils.agent_selection_utils import agent_type_to_agent_class, agent_type_to_plot_functions
 
 # this is the sequential version so we can calculate compute performance metrics
 def solve_by_horizon_sequential(
@@ -194,6 +195,7 @@ def solve_by_horizon(
     num_iters: int,
     planning_horizon: int,
     u_dim: int,
+    pos_dim: int,
     tsteps: int,
     mask_horizon: int,
     mask_threshold: float,
@@ -298,7 +300,7 @@ def solve_by_horizon(
         # game solving optimization loop 
         for _ in range(num_iters + 1):
             horizon_x_trajs, A_trajs, B_trajs = jit_batched_linearize_dyn(horizon_x0s, horizon_u_trajs)
-            all_x_pos = jnp.broadcast_to(horizon_x_trajs[None, :, :, :2], (n_agents, n_agents, planning_horizon, 2))
+            all_x_pos = jnp.broadcast_to(horizon_x_trajs[None, :, :, :pos_dim], (n_agents, n_agents, planning_horizon, pos_dim))
             other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
             mask_for_step = jnp.tile(masks[:, None, :], (1, planning_horizon, 1))
             a_trajs, b_trajs = jit_batched_linearize_loss(horizon_x_trajs, horizon_u_trajs, horizon_ref_trajs, other_x_trajs, mask_for_step)
@@ -336,26 +338,37 @@ if __name__ == "__main__":
     control_weight = opt_config.control_weight
     Q = jnp.diag(jnp.array(opt_config.Q))
     R = jnp.diag(jnp.array(opt_config.R))
-
-    # redefinitions of game parameters to test adapatbility of model 
-    n_agents = 10 
-    tsteps = 50 
-    num_iters = 50 
-    collision_weight = 5.0
+    x_dim = opt_config.state_dim
+    pos_dim = x_dim // 2
+    u_dim = opt_config.control_dim
+    print("Optimization parameters:")
+    print(f"  agent_type: {agent_type}")
+    print(f"  tsteps: {tsteps}")
+    print(f"  num_iters: {num_iters}")
+    print(f"  step_size: {step_size}")
+    print(f"  collision_weight: {collision_weight}")
+    print(f"  collision_scale: {collision_scale}")
+    print(f"  control_weight: {control_weight}")
 
     # genera random inits
-    boundary_size = 10.0
-    init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size))
-    init_ps = jnp.array([jnp.array([init_ps[i][0], init_ps[i][1], 0.0, 0.0]) for i in range(n_agents)])
-    agents = [PointAgent(dt, x_dim=4, u_dim=2, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=control_weight, device=device) for _ in range(n_agents)]
+    boundary_size = 3.5
+    init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
+    if x_dim == 4:
+        init_ps = jnp.array([jnp.array([init_ps[i][0], init_ps[i][1]] + [0.0] * (pos_dim)) for i in range(n_agents)])
+    elif x_dim == 6:
+        init_ps = jnp.array([jnp.array([init_ps[i][0], init_ps[i][1], init_ps[i][2]] + [0.0] * (pos_dim)) for i in range(n_agents)])
+    else:
+        raise ValueError(f"Invalid x_dim: {x_dim}")
+
+    agent_class = agent_type_to_agent_class(agent_type)
+    agents = [agent_class(dt, x_dim=x_dim, u_dim=u_dim, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=control_weight, device=device) for _ in range(n_agents)]
 
     # setup loss functions
     for agent in agents:
-        agent.create_loss_functions_no_mask()
+        agent.create_loss_function_mask()
 
-    ref_trajs = jnp.array([jnp.linspace(init_ps[i][:2], goals[i], tsteps) for i in range(n_agents)])
+    ref_trajs = jnp.array([jnp.linspace(init_ps[i][:pos_dim], goals[i], tsteps) for i in range(n_agents)])
     mask_horizon = config.game.T_observation
-    u_dim = 2
     mask_mag = None # default definition of mask magnitude
     use_only_ego_masks = False
 
@@ -363,23 +376,24 @@ if __name__ == "__main__":
     # model_path = "log/psn_gru_full_planning_true_goals_N_10_T_50_obs_10_lr_0.002_bs_64_sigma1_0.075_sigma2_0.075_epochs_50/20251023_001904/psn_best_model.pkl"
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
-    model_type = "gnn"
-    model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251110_201039/psn_best_model.pkl"
-    model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
-    use_only_ego_masks = False 
+    # model_type = "gnn"
+    # model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251110_201039/psn_best_model.pkl"
+    # model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
+    # use_only_ego_masks = False 
 
-    # model_type = "jacobian"
-    # mask_mag = 5
-    # model = None
-    # model_state = None
+    model_type = "jacobian"
+    mask_mag = 5
+    model = None
+    model_state = None
 
     # solve by horizon
-    final_x_trajs, control_trajs, simulation_masks, total_game_theory_optimization_time = solve_by_horizon_sequential(
+    final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(
         agents=agents,
         initial_states=init_ps,
         ref_trajs=ref_trajs,
         num_iters=num_iters,
         u_dim=u_dim,
+        pos_dim=pos_dim,
         tsteps=tsteps,
         planning_horizon=planning_horizon,
         mask_horizon=mask_horizon,
@@ -394,7 +408,6 @@ if __name__ == "__main__":
         collision_weight=collision_weight,
         collision_scale=collision_scale,
     )
-    print(f"Total game theory optimization time: {total_game_theory_optimization_time}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = f"log/solve_by_horizon_run/{timestamp}"
@@ -402,6 +415,8 @@ if __name__ == "__main__":
     plot_save_path = os.path.join(out_dir, "test.png")
     gif_save_path = os.path.join(out_dir, "test.gif")
 
-    # plot_point_agent_trajs(final_x_trajs, goals, init_ps, save_path=plot_save_path)
-    # plot_point_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, gif_save_path)
+    plot_functions = agent_type_to_plot_functions(agent_type)
+
+    plot_functions["plot_traj"](final_x_trajs, goals, init_ps, save_path=plot_save_path)
+    plot_functions["plot_traj_gif"](final_x_trajs, goals, init_ps, gif_save_path)
 
