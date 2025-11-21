@@ -381,7 +381,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
     # use_only_ego_masks = False 
 
-    model_type = "jacobian"
+    model_type = "barrier_function"
     mask_mag = 5
     model = None
     model_state = None
@@ -418,5 +418,5 @@ if __name__ == "__main__":
     plot_functions = agent_type_to_plot_functions(agent_type)
 
     plot_functions["plot_traj"](final_x_trajs, goals, init_ps, save_path=plot_save_path)
-    plot_functions["plot_traj_gif"](final_x_trajs, goals, init_ps, gif_save_path)
+    plot_functions["plot_mask_gif"](final_x_trajs, goals, init_ps, simulation_masks, 0, gif_save_path)
 

@@ -12,12 +12,14 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
     
 from load_config import load_config, setup_jax_config, get_device_config
-from solver.solve import create_agent_setup, create_loss_functions, solve_ilqgames_parallel_no_mask, save_trajectory_sample, plot_sample_trajectories
+from solver.solve import create_agent_setup, create_loss_functions, solve_ilqgames_parallel_no_mask, save_trajectory_sample
 import random
+from utils.agent_selection_utils import agent_type_to_agent_class, agent_type_to_plot_functions
 
 def generate_reference_trajectories(**kwargs):
     # extract inputs
     n_agents = kwargs["n_agents"]
+    agent_type = kwargs["agent_type"]
     tsteps = kwargs["tsteps"]
     dt = kwargs["dt"]
     num_iters = kwargs["num_iters"]
@@ -34,6 +36,10 @@ def generate_reference_trajectories(**kwargs):
     x_dim = kwargs["x_dim"]
     u_dim = kwargs["u_dim"]
     dt = kwargs["dt"]
+    pos_dim = x_dim // 2
+    
+    # Get the agent class based on agent type
+    agent_class = agent_type_to_agent_class(agent_type)
 
     num_existing_samples = len(os.listdir(output_dir)) // 2
     start_id = num_existing_samples
@@ -44,7 +50,7 @@ def generate_reference_trajectories(**kwargs):
     for sample_id in tqdm(range(start_id, num_samples), total=num_samples - start_id, desc="Generating reference trajectories"):
         # create agent setup
         if gen_type == "fixed":
-            agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
+            agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, agent_class, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
             create_loss_functions(agents, "no_mask")
         elif gen_type == "variable":
             # make it twice as more likely to generate n > 5 agents than n < 5 agents
@@ -59,7 +65,7 @@ def generate_reference_trajectories(**kwargs):
             n_agents = random.choice(selection_pool)
             # recalibrate boundary size based on number of agents
             boundary_size = n_agents**(0.5)  * 1.75
-            agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
+            agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, agent_class, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
             create_loss_functions(agents, "no_mask")
         else:
             raise ValueError(f"Invalid generation type: {gen_type}")
@@ -73,8 +79,8 @@ def generate_reference_trajectories(**kwargs):
             n_agents, 
             tsteps, 
             dt, 
-            jnp.array([initial_states[i][:2] for i in range(n_agents)]),  # Extract positions
-            jnp.array([target_positions[i][:2] for i in range(n_agents)]),  # Extract positions
+            jnp.array([initial_states[i][:pos_dim] for i in range(n_agents)]),  # Extract positions
+            jnp.array([target_positions[i][:pos_dim] for i in range(n_agents)]),  # Extract positions
             state_trajs,
             control_trajs
         )
@@ -84,9 +90,29 @@ def generate_reference_trajectories(**kwargs):
         with open(json_path, "w") as f:
             json.dump(sample_data, f, indent=2)
 
-        # create and save trajectory plot
+        # create and save trajectory plot using agent-type-aware plotting
         plot_path = os.path.join(output_dir, f"ref_traj_sample_{sample_id:03d}.png")
-        plot_sample_trajectories(n_agents, sample_data, boundary_size, plot_path)
+        
+        # Extract trajectory data and format for plotting
+        init_positions = jnp.array(sample_data["init_positions"])
+        target_positions = jnp.array(sample_data["target_positions"])
+        
+        # Convert state trajectories to (n_agents, n_timesteps, pos_dim) format
+        trajs = jnp.array([
+            jnp.array(sample_data["trajectories"][f"agent_{i}"]["states"])[:, :pos_dim]
+            for i in range(n_agents)
+        ])
+        
+        # Get agent-specific plotting functions and call the trajectory plotter
+        plot_functions = agent_type_to_plot_functions(agent_type)
+        plot_functions["plot_traj"](
+            trajs=trajs,
+            goals=target_positions,
+            init_points=init_positions,
+            title=f"Reference Trajectory Sample {sample_id:03d} - {n_agents} agents",
+            show_legend=(n_agents <= 10),
+            save_path=plot_path
+        )
 
 if __name__ == "__main__":
     config = load_config()
@@ -128,7 +154,7 @@ if __name__ == "__main__":
     else:
         raise ValueError(f"Invalid generation type: {gen_type}")
     
-    output_dir = os.path.join("src/data", output_dir)
+    output_dir = os.path.join("src/data", f"{agent_type}_agent_data", output_dir)
     os.makedirs(output_dir, exist_ok=True)
     num_samples = config.reference_generation.num_samples
 
@@ -136,6 +162,7 @@ if __name__ == "__main__":
     args = {
         "n_agents": n_agents,
         "tsteps": tsteps,
+        "agent_type": agent_type,
         "dt": dt,
         "num_iters": num_iters,
         "step_size": step_size,

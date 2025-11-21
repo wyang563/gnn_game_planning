@@ -711,7 +711,7 @@ def train_gnn(
     best_epoch = 0
 
     # Main training loop
-    print(f"Starting PSN training with pretrained goals...")
+    print(f"Starting GNN training...")
     print(f"Training parameters: epochs={num_epochs}, lr={learning_rate}, batch_size={batch_size}")
     print(f"Loss weights: σ1={sigma1}, σ2={sigma2}")
     print(f"Edge metric: {edge_metric}")

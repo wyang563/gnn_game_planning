@@ -747,8 +747,199 @@ def plot_drone_agent_trajs_gif(trajs, goals, init_points, save_path: str,
     )
     print(f"✓ GIF created successfully!")
 
-def plot_drone_agent_gif():
-    pass
+def plot_drone_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_agent_id, 
+                   save_path, fps=10, figsize=(12, 10), xlim=None, ylim=None, zlim=None):
+    """
+    Create a GIF animation showing drone agent trajectories with mask-based highlighting in 3D.
+    
+    Args:
+        trajectories: Array of shape (n_agents, n_timesteps, state_dim) containing trajectories
+        goals: Array of shape (n_agents, 3) containing goal positions for each agent
+        init_positions: Array of shape (n_agents, 3) containing initial positions
+        simulation_masks: Array of shape (n_timesteps, n_agents) or (n_agents, n_timesteps) 
+                         boolean mask indicating which agents are selected at each timestep
+        ego_agent_id: int, ID of the ego agent to highlight in blue
+        save_path: str, path to save the GIF file
+        fps: int, frames per second for the GIF (default: 10)
+        figsize: tuple, figure size (default: (12, 10))
+        xlim: tuple, x-axis limits (default: None, auto-calculated from data)
+        ylim: tuple, y-axis limits (default: None, auto-calculated from data)
+        zlim: tuple, z-axis limits (default: None, auto-calculated from data)
+    """
+    # Convert to numpy arrays
+    trajectories = np.array(trajectories)
+    goals = np.array(goals)
+    init_positions = np.array(init_positions)
+    simulation_masks = np.array(simulation_masks)
+    
+    # Extract position data (first 3 columns if state includes velocity)
+    if trajectories.shape[-1] > 3:
+        positions = trajectories[:, :, :3]
+    else:
+        positions = trajectories
+    
+    n_agents, n_timesteps, _ = positions.shape
+    
+    # Handle mask shape - convert to (n_timesteps, n_agents)
+    if simulation_masks.shape[0] == n_agents and simulation_masks.shape[1] == n_timesteps:
+        simulation_masks = simulation_masks.T
+    
+    # Auto-calculate axis limits if not provided
+    if xlim is None or ylim is None or zlim is None:
+        # Gather all x, y, z coordinates from trajectories, goals, and initial positions
+        all_x = np.concatenate([
+            positions[:, :, 0].flatten(),
+            goals[:, 0],
+            init_positions[:, 0]
+        ])
+        all_y = np.concatenate([
+            positions[:, :, 1].flatten(),
+            goals[:, 1],
+            init_positions[:, 1]
+        ])
+        all_z = np.concatenate([
+            positions[:, :, 2].flatten(),
+            goals[:, 2],
+            init_positions[:, 2]
+        ])
+        
+        # Calculate min and max with padding (15% of the range)
+        x_min, x_max = all_x.min(), all_x.max()
+        y_min, y_max = all_y.min(), all_y.max()
+        z_min, z_max = all_z.min(), all_z.max()
+        
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        z_range = z_max - z_min
+        
+        x_padding = max(0.15 * x_range, 0.5)  # At least 0.5 units of padding
+        y_padding = max(0.15 * y_range, 0.5)
+        z_padding = max(0.15 * z_range, 0.5)
+        
+        if xlim is None:
+            xlim = (x_min - x_padding, x_max + x_padding)
+        if ylim is None:
+            ylim = (y_min - y_padding, y_max + y_padding)
+        if zlim is None:
+            zlim = (z_min - z_padding, z_max + z_padding)
+    
+    # Color scheme
+    ego_color = 'darkblue'
+    other_agent_color = 'gray'
+    selected_color = 'red'
+    
+    print(f"Creating GIF with {n_timesteps} frames...")
+    
+    # Generate all frames
+    frames = []
+    for step in range(n_timesteps):
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_zlim(zlim)
+        
+        # Title
+        ax.set_title(f'Step {step+1}/{n_timesteps}', fontsize=12, fontweight='bold')
+        ax.set_xlabel('X Position')
+        ax.set_ylabel('Y Position')
+        ax.set_zlabel('Z Position')
+        ax.grid(True, alpha=0.3)
+        
+        # Get selected agents at this timestep
+        selected_agents = np.where(simulation_masks[step])[0] if step < len(simulation_masks) else []
+        
+        # Plot trajectories for all agents (gradually accumulated up to current step)
+        for i in range(n_agents):
+            # Only plot trajectory up to current step
+            traj = positions[i, :step+1, :]
+            
+            is_selected = i in selected_agents
+            
+            if i == ego_agent_id:  # Ego agent
+                if len(traj) > 1:
+                    ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], '-', 
+                           color=ego_color, alpha=0.9, linewidth=3, 
+                           label=f'Ego Agent {i}')
+            else:  # Other agents
+                if len(traj) > 1:
+                    if is_selected:
+                        # Selected agent: solid line, red color
+                        ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], '-', 
+                               color=selected_color, alpha=0.8, linewidth=2, 
+                               label=f'Agent {i} (Selected)')
+                    else:
+                        # Non-selected agent: dashed line, gray color
+                        ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], '--', 
+                               color=other_agent_color, alpha=0.4, linewidth=1, 
+                               label=f'Agent {i}')
+        
+        # Plot current positions
+        for i in range(n_agents):
+            is_selected = i in selected_agents
+            current_pos = positions[i, step, :]
+            
+            if i == ego_agent_id:
+                # Ego agent: blue circle
+                ax.scatter(current_pos[0], current_pos[1], current_pos[2],
+                          color=ego_color, s=100, marker='o', alpha=0.8,
+                          edgecolors='black', linewidth=2)
+            else:
+                # Other agents: colored by selection status
+                if is_selected:
+                    ax.scatter(current_pos[0], current_pos[1], current_pos[2],
+                              color=selected_color, s=80, marker='o', alpha=0.8,
+                              edgecolors='black', linewidth=1.5)
+                    # Add text label with selection indicator
+                    ax.text(current_pos[0] + 0.1, current_pos[1] + 0.1, current_pos[2] + 0.1, 
+                           f'{i}*', fontsize=10, ha='left', va='bottom', 
+                           bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.8))
+                else:
+                    ax.scatter(current_pos[0], current_pos[1], current_pos[2],
+                              color=other_agent_color, s=60, marker='o', alpha=0.6,
+                              edgecolors='black', linewidth=1)
+                    # Add text label
+                    ax.text(current_pos[0] + 0.1, current_pos[1] + 0.1, current_pos[2] + 0.1, 
+                           f'{i}', fontsize=10, ha='left', va='bottom', 
+                           bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.8))
+        
+        # Plot goals as stars
+        for i in range(n_agents):
+            goal_pos = goals[i]
+            
+            if i == ego_agent_id:  # Ego agent goal
+                ax.scatter(goal_pos[0], goal_pos[1], goal_pos[2],
+                          color=ego_color, s=200, marker='*', 
+                          edgecolors='black', linewidth=2, alpha=0.8)
+            else:  # Other agent goals
+                ax.scatter(goal_pos[0], goal_pos[1], goal_pos[2],
+                          color=other_agent_color, s=150, marker='*', 
+                          edgecolors='black', linewidth=1.5, alpha=0.6)
+        
+        plt.tight_layout()
+        
+        # Convert to PIL Image
+        fig.canvas.draw()
+        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+        buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+        img = Image.fromarray(buf, 'RGBA')
+        
+        frames.append(img)
+        plt.close(fig)
+        
+        if (step + 1) % 10 == 0 or step == n_timesteps - 1:
+            print(f"  Generated frame {step + 1}/{n_timesteps}")
+    
+    # Save as GIF
+    print(f"Saving GIF to: {save_path}")
+    frames[0].save(
+        save_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=1000//fps,  # Convert fps to duration in ms
+        loop=0
+    )
+    print(f"✓ GIF created successfully!")
 
 def plot_past_and_predicted_drone_agent_trajectories():
     pass

@@ -173,6 +173,7 @@ def eval_model(
     dt = kwargs.get("dt", 0.1)
     top_k_mask = kwargs.get("top_k_mask", 3)
     pos_dim = kwargs.get("pos_dim", 2)
+    eval_all_methods = kwargs.get("eval_all_methods", False)
 
     # Load dataset
     print(f"Loading dataset from {dataset_path}...")
@@ -180,7 +181,10 @@ def eval_model(
     print(f"Loaded {len(dataset)} samples")
 
     # Define all methods to evaluate
-    methods = ["nearest_neighbors", "jacobian", "cost_evolution", "barrier_function"]
+    if eval_all_methods:
+        methods = ["nearest_neighbors", "jacobian", "cost_evolution", "barrier_function"]
+    else:
+        methods = []
     
     # Load model if provided
     if model_path is not None:
@@ -389,6 +393,9 @@ if __name__ == "__main__":
     device = get_device_config()
     print(f"Using device: {device}")
 
+    # TOGGLE FOR EVALUATING ALL METHODS
+    eval_all_methods = False
+    
     # Extract parameters from configuration
     dt = config.game.dt
     tsteps = config.game.T_total
@@ -437,6 +444,7 @@ if __name__ == "__main__":
         "dt": dt, 
         "top_k_mask": top_k_mask,
         "pos_dim": opt_config.state_dim // 2,
+        "eval_all_methods": eval_all_methods,
     }
 
     eval_model(**args)

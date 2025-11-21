@@ -16,11 +16,13 @@ from solver.solve import create_agent_setup, create_loss_functions, solve_ilqgam
 from solver.solve_by_horizon import solve_by_horizon
 import glob
 from solver.point_agent import PointAgent
+from utils.agent_selection_utils import agent_type_to_agent_class, agent_type_to_plot_functions
 
 
 def generate_receding_horizon_trajectories(**kwargs):
     # extract inputs
     n_agents = kwargs["n_agents"]
+    agent_type = kwargs["agent_type"]
     tsteps = kwargs["tsteps"]
     dt = kwargs["dt"]
     num_iters = kwargs["num_iters"]
@@ -42,11 +44,13 @@ def generate_receding_horizon_trajectories(**kwargs):
 
     # get files from reference trajectory directory
     if gen_type == "fixed":
-        reference_dir = os.path.join("src/data", f"reference_trajectories_{n_agents}p")
+        reference_dir = os.path.join("src/data", agent_type, f"reference_trajectories_{n_agents}p")
     elif gen_type == "variable":
-        reference_dir = os.path.join("src/data", f"reference_trajectories_upto_{n_agents}p")
+        reference_dir = os.path.join("src/data", agent_type, f"reference_trajectories_upto_{n_agents}p")
     else:
         raise ValueError(f"Invalid generation type: {gen_type}")
+    
+    agent_class = agent_type_to_agent_class(agent_type)
 
     json_files = sorted(glob.glob(os.path.join(reference_dir, "ref_traj_sample_*.json")))
     num_existing_samples = len(json_files)
@@ -61,10 +65,10 @@ def generate_receding_horizon_trajectories(**kwargs):
         init_positions = sample_data["init_positions"]
         target_positions = sample_data["target_positions"]
         n_agents = len(init_positions)
-        agents = [PointAgent(dt, x_dim=x_dim, u_dim=u_dim, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=ctrl_weight, device=device) for _ in range(n_agents)]
+        agents = [agent_class(dt, x_dim=x_dim, u_dim=u_dim, Q=Q, R=R, collision_weight=collision_weight, collision_scale=collision_scale, ctrl_weight=ctrl_weight, device=device) for _ in range(n_agents)]
         for agent in agents:
             agent.create_loss_function_mask()
-        initial_states = [jnp.array([init_positions[i][0], init_positions[i][1], 0.0, 0.0]) for i in range(n_agents)]
+        initial_states = [jnp.array(init_positions[i][:x_dim//2].tolist() + [0.0] * (x_dim//2)) for i in range(n_agents)]
         reference_trajectories = jnp.array([jnp.linspace(jnp.array(init_positions[i]), jnp.array(target_positions[i]), tsteps) for i in range(n_agents)])
 
         state_trajs, control_trajs, _ = solve_by_horizon(
@@ -87,7 +91,7 @@ def generate_receding_horizon_trajectories(**kwargs):
         )
 
         # Convert to proper format for saving
-        init_pos_array = jnp.array([[initial_states[i][0], initial_states[i][1]] for i in range(n_agents)])
+        init_pos_array = jnp.array([initial_states[i][:x_dim//2].tolist() for i in range(n_agents)])
         target_pos_array = jnp.array(target_positions)
         
         sample_data = save_trajectory_sample(
@@ -109,7 +113,9 @@ def generate_receding_horizon_trajectories(**kwargs):
 
         plot_filename = f"receding_horizon_sample_{sample_id:03d}.png"
         plot_path = os.path.join(out_dir, plot_filename)
-        plot_sample_trajectories(n_agents, sample_data, boundary_size, plot_path)
+        # plot_sample_trajectories(n_agents, sample_data, boundary_size, plot_path)
+        plot_functions = agent_type_to_plot_functions(agent_type)
+        plot_functions["plot_traj"](state_trajs, target_positions, init_positions, save_path=plot_path)
 
 if __name__ == "__main__":
     config = load_config()
@@ -161,6 +167,7 @@ if __name__ == "__main__":
     args = {
         "config": config,
         "n_agents": n_agents,
+        "agent_type": agent_type,
         "tsteps": tsteps,
         "dt": dt,
         "num_iters": num_iters,

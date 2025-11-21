@@ -2,8 +2,8 @@ import json
 import os
 import sys
 import random
+import numpy as np
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 # Add project root to path for imports
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,13 +12,18 @@ if project_root not in sys.path:
     
 from load_config import load_config
 from utils.goal_init import random_init
+from utils.plot import plot_point_agent_trajs, plot_drone_agent_trajs
 
 if __name__ == "__main__":
     config = load_config()
     n_agents = config.game.N_agents
+    agent_type = config.game.agent_type
+    opt_config = getattr(config.optimization, agent_type)
+    x_dim = opt_config.state_dim
+    pos_dim = x_dim // 2
 
     num_samples = 150 
-    output_dir = f"src/data/eval_data_upto_{n_agents}p"
+    output_dir = f"src/data/{agent_type}_agent_data/eval_data_upto_{n_agents}p"
     os.makedirs(output_dir, exist_ok=True)
 
     selection_pool = []
@@ -34,7 +39,7 @@ if __name__ == "__main__":
     for sample_id in tqdm(range(num_samples), total=num_samples, desc="Generating evaluation data"):
         n_agents = random.choice(selection_pool)
         boundary_size = n_agents**(0.7)  * 1.75
-        init_ps, init_goals = random_init(n_agents, (-boundary_size, boundary_size))
+        init_ps, init_goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
         out_file = os.path.join(output_dir, f"eval_data_sample_{sample_id:03d}.json")
         with open(out_file, "w") as f:
             json.dump({
@@ -44,32 +49,34 @@ if __name__ == "__main__":
                 "init_goals": [arr.tolist() for arr in init_goals],
             }, f, indent=2)
         
-        # plot start and goal positions
+        # plot start and goal positions using appropriate plotting function based on agent type
         plot_path = os.path.join(output_dir, f"eval_data_sample_{sample_id:03d}.png")
-        fig, ax = plt.subplots(figsize=(6, 6))
-        init_ps_arr = list(init_ps)
-        init_goals_arr = list(init_goals)
-        for agent_idx in range(n_agents):
-            color = plt.cm.tab20(agent_idx % 20)
-            # Plot start point
-            ax.scatter(init_ps_arr[agent_idx][0], init_ps_arr[agent_idx][1], marker='o', color=color, label=f"Agent {agent_idx+1} Start" if agent_idx == 0 else "")
-            # Plot goal point
-            ax.scatter(init_goals_arr[agent_idx][0], init_goals_arr[agent_idx][1], marker='X', color=color, label=f"Agent {agent_idx+1} Goal" if agent_idx == 0 else "")
-            # Optionally, connect start to goal
-            ax.plot([init_ps_arr[agent_idx][0], init_goals_arr[agent_idx][0]],
-                    [init_ps_arr[agent_idx][1], init_goals_arr[agent_idx][1]],
-                    color=color, linestyle='--', linewidth=1, alpha=0.6)
-        ax.set_title(f"Eval Data Sample {sample_id:03d} - {n_agents} agents")
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_aspect('equal', adjustable='box')
-        ax.grid(True, alpha=0.3)
-
-        if n_agents <= 10:
-            ax.legend(loc="best", fontsize="small")
-        plt.tight_layout()
-        plt.savefig(plot_path)
-        plt.close(fig)
+        
+        # Create a minimal trajectory with 2 timesteps (start and goal) for visualization
+        trajs = np.array([[init_ps[i], init_goals[i]] for i in range(n_agents)])  # (n_agents, 2, pos_dim)
+        
+        # Call the appropriate plotting function based on agent type
+        if agent_type == "point":
+            plot_point_agent_trajs(
+                trajs=trajs,
+                goals=np.array(init_goals),
+                init_points=np.array(init_ps),
+                title=f"Eval Data Sample {sample_id:03d} - {n_agents} agents",
+                show_legend=(n_agents <= 10),
+                save_path=plot_path
+            )
+        elif agent_type == "drone":
+            plot_drone_agent_trajs(
+                trajs=trajs,
+                goals=np.array(init_goals),
+                init_points=np.array(init_ps),
+                title=f"Eval Data Sample {sample_id:03d} - {n_agents} agents",
+                show_legend=(n_agents <= 10),
+                save_path=plot_path
+            )
+        else:
+            # Fallback for unknown agent types
+            print(f"Warning: Unknown agent type '{agent_type}', skipping plot.")
 
 
 
