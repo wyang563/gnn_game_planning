@@ -5,6 +5,7 @@ import jax.numpy as jnp
 from typing import List, Dict, Tuple, Any, Optional
 from load_config import load_config, get_device_config
 from solver.point_agent import PointAgent
+from solver.drone_agent import DroneAgent
 from data.ref_traj_data_loading import prepare_batch_for_training
 from solver.solve_differentiable import solve_masked_game_differentiable, solve_masked_game_differentiable_parallel
 from data.ref_traj_data_loading import extract_observation_trajectory 
@@ -27,6 +28,7 @@ agent_type = config.game.agent_type
 opt_config = getattr(config.optimization, agent_type)
 state_dim = opt_config.state_dim
 control_dim = opt_config.control_dim
+pos_dim = state_dim // 2  # Position dimension (2 for point agents, 3 for drone agents)
 num_iters = opt_config.num_iters
 step_size = opt_config.step_size
 collision_weight = opt_config.collision_weight
@@ -34,8 +36,8 @@ collision_scale = opt_config.collision_scale
 ctrl_weight = opt_config.control_weight
 device = get_device_config()
 
-Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights [x, y, vx, vy]
-R = jnp.diag(jnp.array(opt_config.R))               # Control cost weights [ax, ay]
+Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights
+R = jnp.diag(jnp.array(opt_config.R))  # Control cost weights
 
 def binary_loss(mask: jnp.ndarray) -> jnp.ndarray:
     """Binary loss: encourages mask values to be close to 0 or 1."""
@@ -51,26 +53,26 @@ def mask_sparsity_loss(mask: jnp.ndarray) -> jnp.ndarray:
 # ============================================================================
 
 def _observations_to_initial_states(obs_row: jnp.ndarray, n_agents: int, obs_input_type: str = "full") -> jnp.ndarray:
-    """Convert a flattened observations row into initial 4D states for each agent.
+    """Convert a flattened observations row into initial states for each agent.
     obs_row: shape (T_observation * N_agents * obs_dim,)
-    returns: (N_agents, 4)
+    returns: (N_agents, state_dim)
     """
     # Determine observation dimension based on input type
-    obs_dim = 2 if obs_input_type == "partial" else 4
+    obs_dim = pos_dim if obs_input_type == "partial" else state_dim
     
     traj = obs_row.reshape(T_observation, n_agents, obs_dim)
     first = traj[0]  # (N_agents, obs_dim)
     
     if obs_input_type == "partial":
-        # For partial observations, we only have position (x, y)
+        # For partial observations, we only have position
         # Set velocity to zero
-        pos = first[:, :2]  # (N_agents, 2)
-        vel = jnp.zeros((n_agents, 2))  # (N_agents, 2) - zero velocity
+        pos = first[:, :pos_dim]  # (N_agents, pos_dim)
+        vel = jnp.zeros((n_agents, pos_dim))  # (N_agents, pos_dim) - zero velocity
         return jnp.concatenate([pos, vel], axis=-1)
     else:
         # For full observations, we have position and velocity
-        pos = first[:, :2]
-        vel = first[:, 2:4]
+        pos = first[:, :pos_dim]
+        vel = first[:, pos_dim:]
         return jnp.concatenate([pos, vel], axis=-1)
 
 def similarity_loss(pred_traj: jnp.ndarray, target_traj: jnp.ndarray) -> jnp.ndarray:
@@ -88,9 +90,9 @@ def similarity_loss(pred_traj: jnp.ndarray, target_traj: jnp.ndarray) -> jnp.nda
     Returns:
         Similarity loss value comparing predicted vs reference trajectory
     """
-    # Extract positions (first 2 dimensions) for comparison
-    pred_positions = pred_traj[:, :2]  # (T_total, 2)
-    target_positions = target_traj[:, :2]  # (T_reference, 2)
+    # Extract positions (first pos_dim dimensions) for comparison
+    pred_positions = pred_traj[:, :pos_dim]  # (T_total, pos_dim)
+    target_positions = target_traj[:, :pos_dim]  # (T_reference, pos_dim)
     
     # Ensure both trajectories have the same length for comparison
     min_length = min(pred_positions.shape[0], target_positions.shape[0])
@@ -99,8 +101,8 @@ def similarity_loss(pred_traj: jnp.ndarray, target_traj: jnp.ndarray) -> jnp.nda
         return jnp.array(100.0)  # High loss if no valid comparison possible
     
     # Use only the first min_length steps for comparison
-    pred_positions_matched = pred_positions[:min_length]  # (min_length, 2)
-    target_positions_matched = target_positions[:min_length]  # (min_length, 2)
+    pred_positions_matched = pred_positions[:min_length]  # (min_length, pos_dim)
+    target_positions_matched = target_positions[:min_length]  # (min_length, pos_dim)
     
     # Compute position-wise distance
     position_diff = pred_positions_matched - target_positions_matched
@@ -116,12 +118,12 @@ def compute_similarity_loss_from_arrays(agents: list,
                                         ref_ego_traj: jnp.ndarray,
                                         n_agents: int) -> jnp.ndarray:
     """Fully-JAX similarity loss using arrays only (no Python dict access).
-    - initial_states: (N_agents, 4)
-    - predicted_goals_row: (N_agents * 2,) or (N_agents, 2)
+    - initial_states: (N_agents, state_dim)
+    - predicted_goals_row: (N_agents * pos_dim,) or (N_agents, pos_dim)
     - predicted_mask_row: (N_agents,)
     - ref_ego_traj: (T_reference, state_dim)
     """
-    targets = predicted_goals_row.reshape(n_agents, 2)
+    targets = predicted_goals_row.reshape(n_agents, pos_dim)
     mask_values = predicted_mask_row
 
     # Use the new differentiable game solver directly
@@ -148,11 +150,14 @@ def compute_similarity_loss_from_arrays(agents: list,
 def batch_similarity_loss(predicted_masks: jnp.ndarray, predicted_goals: jnp.ndarray, batch_data: List[Dict[str, Any]], obs_input_type: str = "full") -> jnp.ndarray:
     """Batch similarity loss: encourages predicted masks to be similar to predicted goals."""
     n_agents = batch_data[0]['metadata']['n_agents']
+    
+    # Use appropriate agent type based on configuration
+    AgentClass = DroneAgent if agent_type == "drone" else PointAgent
     shared_agents = [
-        PointAgent(
+        AgentClass(
             dt=dt, 
-            x_dim=4, 
-            u_dim=2, 
+            x_dim=state_dim, 
+            u_dim=control_dim, 
             Q=Q, 
             R=R, 
             collision_weight=collision_weight, 
@@ -231,18 +236,18 @@ def ego_agent_game_cost(ego_state_traj: jnp.ndarray, ego_control_traj: jnp.ndarr
         ego_control = ego_control_traj[t]  # (control_dim,)
         ref_state = ref_traj[t]  # (state_dim,)
         
-        # Navigation cost - track reference trajectory
-        nav_cost = jnp.sum(jnp.square(ego_state[:2] - ref_state[:2]))
+        # Navigation cost - track reference trajectory (position only)
+        nav_cost = jnp.sum(jnp.square(ego_state[:pos_dim] - ref_state[:pos_dim]))
         
         # Collision avoidance cost with other agents (weighted by mask values)
         collision_cost = 0.0
         if len(other_agents_trajs) > 0:
-            ego_pos = ego_state[:2]  # (2,)
+            ego_pos = ego_state[:pos_dim]  # (pos_dim,)
             
             for i, other_traj in enumerate(other_agents_trajs):
                 if i < len(mask_values):
                     other_state = other_traj[t]  # (state_dim,)
-                    other_pos = other_state[:2]  # (2,)
+                    other_pos = other_state[:pos_dim]  # (pos_dim,)
                     
                     # Distance squared between ego and other agent
                     distance_squared = jnp.sum(jnp.square(ego_pos - other_pos))
@@ -347,8 +352,8 @@ def compute_ego_agent_cost_from_arrays(agents: list,
     
     Args:
         agents: List of agent objects (length n_agents)
-        initial_states: Initial states for all agents (n_agents, 4)
-        predicted_goals_row: Predicted goals for all agents (n_agents * 2,) or (n_agents, 2)
+        initial_states: Initial states for all agents (n_agents, state_dim)
+        predicted_goals_row: Predicted goals for all agents (n_agents * pos_dim,) or (n_agents, pos_dim)
         predicted_mask_row: Predicted mask values for non-ego agents (n_agents - 1,)
         ref_ego_traj: Reference trajectory for ego agent (T_reference, state_dim)
         ref_other_trajs: Reference trajectories for other agents (n_agents-1, T_reference, state_dim)
@@ -358,7 +363,7 @@ def compute_ego_agent_cost_from_arrays(agents: list,
     Returns:
         Ego agent's total game cost
     """
-    targets = predicted_goals_row.reshape(n_agents, 2)
+    targets = predicted_goals_row.reshape(n_agents, pos_dim)
     mask_values = predicted_mask_row
 
     # Solve the full masked game with all agents to get realistic multi-agent dynamics
@@ -402,7 +407,7 @@ def batch_ego_agent_cost(predicted_masks: jnp.ndarray,
     
     Args:
         predicted_masks: Predicted masks from PSN (batch_size, n_agents - 1)
-        predicted_goals: Predicted goals from network (batch_size, n_agents * 2)
+        predicted_goals: Predicted goals from network (batch_size, n_agents * pos_dim)
         batch_data: List of reference trajectory samples
         obs_input_type: Observation input type ["full", "partial"]
         apply_masks: Whether to apply mask values to collision costs (True for game solving, False for training loss)
@@ -412,12 +417,13 @@ def batch_ego_agent_cost(predicted_masks: jnp.ndarray,
     """
     n_agents = batch_data[0]['metadata']['n_agents']
     
-    # Build shared agents once (purely static configuration)
+    # Use appropriate agent type based on configuration
+    AgentClass = DroneAgent if agent_type == "drone" else PointAgent
     shared_agents = [
-        PointAgent(
+        AgentClass(
             dt=dt, 
-            x_dim=4, 
-            u_dim=2, 
+            x_dim=state_dim, 
+            u_dim=control_dim, 
             Q=Q, 
             R=R, 
             collision_weight=collision_weight, 

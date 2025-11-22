@@ -417,9 +417,9 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(opt_config.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_epochs_50_loss_type_ego_agent_cost/20251110_201139/psn_best_model.pkl"
+    model_path = "log/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_epochs_50_loss_type_ego_agent_cost/20251107_202434/psn_best_model.pkl"
     model_type = "gnn"  
-    dataset_path = "src/data/eval_data_upto_20p"
+    dataset_path = f"src/data/{agent_type}_agent_data/eval_data_upto_20p"
     top_k_mask = 2
 
     args = {

@@ -376,15 +376,15 @@ if __name__ == "__main__":
     # model_path = "log/psn_gru_full_planning_true_goals_N_10_T_50_obs_10_lr_0.002_bs_64_sigma1_0.075_sigma2_0.075_epochs_50/20251023_001904/psn_best_model.pkl"
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
-    # model_type = "gnn"
-    # model_path = "log/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251110_201039/psn_best_model.pkl"
-    # model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
-    # use_only_ego_masks = False 
+    model_type = "gnn"
+    model_path = "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_epochs_50_loss_type_ego_agent_cost/20251110_201139/psn_best_model.pkl"
+    model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
+    use_only_ego_masks = False 
 
-    model_type = "barrier_function"
-    mask_mag = 5
-    model = None
-    model_state = None
+    # model_type = "barrier_function"
+    # mask_mag = 5
+    # model = None
+    # model_state = None
 
     # solve by horizon
     final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(

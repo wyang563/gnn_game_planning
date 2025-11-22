@@ -152,6 +152,7 @@ class GNNSelectionNetwork(nn.Module):
     gru_time_decay_factor: float = 0.8
     dropout_rate: float = 0.3
     obs_input_type: str = "full"    # "full" or "partial"
+    x_dim: int = state_dim  # Use state_dim from config (4 for point agents, 6 for drones)
     deterministic: bool = False
     num_message_passing_rounds: int = num_message_passing_rounds
     edge_metric: str = "full" # "random" or "cbf"
@@ -224,8 +225,9 @@ class GNNSelectionNetwork(nn.Module):
         return edge_features
 
     def calculate_closing_speed(self, x_traj_delta):
-        dp = x_traj_delta[..., :2]
-        dv = x_traj_delta[..., 2:]
+        pos_dim = self.x_dim // 2
+        dp = x_traj_delta[..., :pos_dim]
+        dv = x_traj_delta[..., pos_dim:]
         num = -jnp.sum(dp * dv, axis=-1)             
         den = jnp.linalg.norm(dp, axis=-1) + 1e-5    
         closing_speeds = num / den
@@ -256,6 +258,7 @@ class GNNSelectionNetwork(nn.Module):
     def create_graph_adj_matrix(self, x):
         n_agents = x.shape[2]
         batch_size = x.shape[0]
+        pos_dim = self.x_dim // 2
         
         # blank graph adj matrix to start
         graph_adj_matrix = jnp.zeros((batch_size, n_agents, n_agents))
@@ -269,7 +272,7 @@ class GNNSelectionNetwork(nn.Module):
         elif self.edge_metric == "nearest-neighbors":
             x_transposed = jnp.transpose(x, (0, 2, 1, 3))  # (batch_size, n_agents, T, state_dim)
             batched_nearest_neighbors = jax.vmap(
-                lambda x_single: nearest_neighbors_top_k(x_single, top_k=self.edge_metric_top_k),
+                lambda x_single: nearest_neighbors_top_k(x_single, top_k=self.edge_metric_top_k, pos_dim=pos_dim),
                 in_axes=0  # vmap over the first axis (batch dimension)
             )
             graph_adj_matrix = batched_nearest_neighbors(x_transposed)
@@ -281,7 +284,7 @@ class GNNSelectionNetwork(nn.Module):
             w1 = opt_config.collision_weight
             w2 = opt_config.collision_scale
             batched_jacobian = jax.vmap(
-                lambda x_single: jacobian_top_k(x_single, top_k=self.edge_metric_top_k, dt=dt, w1=w1, w2=w2),
+                lambda x_single: jacobian_top_k(x_single, top_k=self.edge_metric_top_k, dt=dt, w1=w1, w2=w2, pos_dim=pos_dim),
                 in_axes=0  # vmap over the first axis (batch dimension)
             )
             graph_adj_matrix = batched_jacobian(x_transposed)
@@ -291,7 +294,7 @@ class GNNSelectionNetwork(nn.Module):
             
             # Use vmap to apply barrier_function_top_k over the batch dimension
             batched_barrier_function = jax.vmap(
-                lambda x_single: barrier_function_top_k(x_single, top_k=self.edge_metric_top_k, R=0.5, kappa=5.0),
+                lambda x_single: barrier_function_top_k(x_single, top_k=self.edge_metric_top_k, R=0.5, kappa=5.0, pos_dim=pos_dim),
                 in_axes=0  # vmap over the first axis (batch dimension)
             )
             graph_adj_matrix = batched_barrier_function(x_transposed)
@@ -333,14 +336,16 @@ class GNNSelectionNetwork(nn.Module):
 
     def predict_future_trajectory(self, x):
         T_obs = x.shape[1]
+
+        pos_dim = self.x_dim // 2
         
         # Extract last known state (most recent observation)
-        last_positions = x[:, -1, :, :2]  
-        last_velocities = x[:, -1, :, 2:] 
+        last_positions = x[:, -1, :, :pos_dim]  
+        last_velocities = x[:, -1, :, pos_dim:] 
         
         # Estimate acceleration using finite differences from recent velocity changes
         if T_obs >= 2:
-            velocity_diff = x[:, -1, :, 2:] - x[:, -2, :, 2:]  
+            velocity_diff = x[:, -1, :, pos_dim:] - x[:, -2, :, pos_dim:]  
             acceleration = velocity_diff / dt  
         else:
             acceleration = jnp.zeros_like(last_velocities)
@@ -372,9 +377,10 @@ class GNNSelectionNetwork(nn.Module):
         return predicted_trajectories
 
     def normalize_trajectories(self, x):
-        # shape (B, T, N, 2)
-        positions = x[..., :2]
-        velocities = x[..., 2:]
+        # shape (B, T, N, x_dim) where x_dim = 4 for point agents or 6 for drones
+        pos_dim = self.x_dim // 2
+        positions = x[..., :pos_dim]
+        velocities = x[..., pos_dim:]
         
         # center positions
         mean_position = jnp.mean(positions, axis=(1,2))  # shape: (B, 2)
@@ -446,7 +452,7 @@ def parse_config_name(gnn_model_path: str) -> Dict[str, Any]:
         log_dir_ind = gnn_model_path_tokens.index("log")
         gnn_model_path = gnn_model_path_tokens[log_dir_ind + 1]
     else:
-        gnn_model_path = gnn_model_path.split("/")[1] # first directory after log/
+        gnn_model_path = gnn_model_path.split("/")[2] # first directory after log/
     config_tokens = gnn_model_path.split("_")
 
     message_passing_ind = config_tokens.index("MP")
@@ -663,12 +669,13 @@ def train_gnn(
            List[float], List[float], List[float], train_state.TrainState, str, float, int]:
     
     # setup log directories
+    agent_train_run_dir = f"{agent_type}_agent_train_runs"
     model_config_name = f"gnn_{obs_input_type}_MP_{num_message_passing_rounds}_edge-metric_{edge_metric}_top-k_{edge_metric_top_k}"
     train_config_name = f"train_n_agents_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}_loss_type_{loss_type}"
     
     # create train log setup
-    model_log_dir = os.path.join("log", model_config_name)
-    train_log_dir = os.path.join("log", model_config_name, train_config_name)
+    model_log_dir = os.path.join("log", agent_train_run_dir, model_config_name)
+    train_log_dir = os.path.join("log", agent_train_run_dir, model_config_name, train_config_name)
     os.makedirs(model_log_dir, exist_ok=True)
     os.makedirs(train_log_dir, exist_ok=True)
     print(f"This GNN model type for training logs will be saved under: {train_log_dir}")
@@ -687,11 +694,11 @@ def train_gnn(
         weight_decay=5e-4  # L2 regularization to prevent overfitting
     )
 
-    # Determine observation dimensions based on input type
+    # Determine observation dimensions based on input type and agent type
     if obs_input_type == "partial":
-        obs_dim = 2  # Only position (x, y)
+        obs_dim = state_dim // 2  # Only position (x, y for point agents, x, y, z for drones)
     else:  # "full"
-        obs_dim = 4  # Full state (x, y, vx, vy)
+        obs_dim = state_dim  # Full state (x, y, vx, vy for point agents, x, y, z, vx, vy, vz for drones)
 
     # Create train state
     input_shape = (batch_size, T_observation, N_agents, obs_dim)
@@ -904,7 +911,7 @@ if __name__ == "__main__":
     # Create dummy input data
     rng = jax.random.PRNGKey(config.training.seed)
 
-    dummy_batch = jax.random.normal(rng, (batch_size, T_observation, N_agents, 4))
+    dummy_batch = jax.random.normal(rng, (batch_size, T_observation, N_agents, state_dim))
 
     # Forward through model, capture outputs
     output = gnn_model.apply({'params': gnn_model.init(rng, dummy_batch)['params']}, dummy_batch, rngs={'dropout': rng}, deterministic=True)
@@ -913,7 +920,7 @@ if __name__ == "__main__":
 
 
     # Load reference trajectories
-    reference_dir = os.path.join("src/data", config.training.gnn_data_dir)
+    reference_dir = os.path.join("src/data", f"{agent_type}_agent_data", config.training.gnn_data_dir)
     print(f"Loading reference trajectories from directory: {reference_dir}")
     training_data, validation_data = load_reference_trajectories(reference_dir)
     loss_type = config.gnn.loss_type
@@ -932,7 +939,7 @@ if __name__ == "__main__":
         sigma2=sigma2,
         batch_size=batch_size,
         rng=rng,
-        obs_input_type=config.psn.obs_input_type,
+        obs_input_type=config.gnn.obs_input_type,
         loss_type=loss_type,
         num_message_passing_rounds=num_message_passing_rounds,
         edge_metric=edge_metric,

@@ -10,12 +10,15 @@ config = load_config()
 T_total = config.game.T_total
 agent_type = config.game.agent_type
 opt_config = getattr(config.optimization, agent_type)
-u_dim = opt_config.control_dim
+state_dim = opt_config.state_dim
+control_dim = opt_config.control_dim
+pos_dim = state_dim // 2  # Position dimension (2 for point agents, 3 for drone agents)
+u_dim = control_dim  # For backward compatibility
 step_size = opt_config.step_size
 ego_agent_id = config.game.ego_agent_id
 dt = config.game.dt
-Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights [x, y, vx, vy]
-R = jnp.diag(jnp.array(opt_config.R))  # Control cost weights [ax, ay]
+Q = jnp.diag(jnp.array(opt_config.Q))  # State cost weights
+R = jnp.diag(jnp.array(opt_config.R))  # Control cost weights
 device = get_device_config()
 
 def solve_masked_game_differentiable_parallel(
@@ -49,11 +52,11 @@ def solve_masked_game_differentiable_parallel(
     jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss = create_batched_loss_functions_mask(agents, device)
 
     # initialize batched arrays
-    control_trajs = jnp.zeros((n_agents, T_total, u_dim))
+    control_trajs = jnp.zeros((n_agents, T_total, control_dim))
     init_states = jnp.array([initial_states[i] for i in range(n_agents)])
     ref_trajs = []
     for i in range(n_agents):
-        start_pos = init_states[i][:2]
+        start_pos = init_states[i][:pos_dim]
         target_pos = target_positions[i]
         ref_traj = jnp.linspace(start_pos, target_pos, T_total)
         ref_trajs.append(ref_traj)
@@ -78,7 +81,7 @@ def solve_masked_game_differentiable_parallel(
         x_trajs, A_trajs, B_trajs = jit_batched_linearize_dyn(init_states, control_trajs)
         
         # Step 2: Get other agents' states (fully differentiable)
-        all_x_pos = jnp.broadcast_to(x_trajs[None, :, :, :2], (n_agents, n_agents, T_total, 2))
+        all_x_pos = jnp.broadcast_to(x_trajs[None, :, :, :pos_dim], (n_agents, n_agents, T_total, pos_dim))
         other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
         
         # Step 3: Linearize loss for all agents (batched, JIT-compiled)
@@ -127,18 +130,18 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
     n_selected = len(agents)
     
     # Convert lists to JAX arrays for better performance and differentiability
-    initial_states_array = jnp.stack([jnp.array(s) for s in initial_states])  # (n_selected, 4)
+    initial_states_array = jnp.stack([jnp.array(s) for s in initial_states])  # (n_selected, state_dim)
     
     # Create reference trajectories (EXACTLY like reference generation)
     # Linear interpolation from initial position to target position
     reference_trajectories = []
     for i in range(n_selected):
-        start_pos = initial_states[i][:2]  # Extract x, y position
+        start_pos = initial_states[i][:pos_dim]  # Extract position
         target_pos = target_positions[i]
         # Linear interpolation over time steps (EXACTLY like reference generation)
         ref_traj = jnp.linspace(start_pos, target_pos, T_total)
-        # Convert to full state trajectory [x, y, vx, vy]
-        ref_states = jnp.zeros((T_total, 4))
+        # Convert to full state trajectory [position, velocity]
+        ref_states = jnp.zeros((T_total, state_dim))
         for t in range(T_total):
             pos = ref_traj[t]
             vel = (target_pos - start_pos) / (T_total * dt)  # Constant velocity
@@ -149,10 +152,10 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
     goal_trajectories = jnp.stack([
         jnp.tile(target_positions[i], (T_total, 1))
         for i in range(n_selected)
-    ])  # (n_selected, T_total, 2)
+    ])  # (n_selected, T_total, pos_dim)
     
     # Initialize control trajectories
-    initial_controls = jnp.zeros((n_selected, T_total, 2))
+    initial_controls = jnp.zeros((n_selected, T_total, control_dim))
     
     # Optimization parameters (following ilqgames_example.py pattern)
     step_size = opt_config.step_size  # Conservative step size similar to original
@@ -162,13 +165,9 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
     training_iters = opt_config.num_iters
     
     def dynamics_function(x, u):
-        """Point mass dynamics: [x, y, vx, vy] with controls [ax, ay]"""
-        return jnp.array([
-            x[2],  # dx/dt = vx
-            x[3],  # dy/dt = vy  
-            u[0],  # dvx/dt = ax
-            u[1]   # dvy/dt = ay
-        ])
+        """Agent dynamics - uses first agent's dynamics function"""
+        # All agents should have the same dynamics in a homogeneous game
+        return agents[0].dyn(x, u)
     
     def integrate_dynamics(x0, u_traj):
         """Integrate dynamics forward using Euler integration"""
@@ -196,7 +195,7 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
         """Compute cost gradients for a single agent"""
         def single_step_cost(x, u, goal_x, other_xs, ref_x=None):
             # Navigation cost - track reference trajectory (EXACTLY like reference generation)
-            nav_cost = jnp.sum(jnp.square(x[:2] - ref_x[:2]))
+            nav_cost = jnp.sum(jnp.square(x[:pos_dim] - ref_x[:pos_dim]))
             
             # Collision avoidance costs - exponential penalty for proximity to other agents
             # (EXACTLY like reference generation) with proper masking
@@ -210,7 +209,7 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
                 
                 # Compute collision cost for each other agent
                 for i, other_x in enumerate(other_xs):
-                    distance_squared = jnp.sum(jnp.square(x[:2] - other_x[:2]))
+                    distance_squared = jnp.sum(jnp.square(x[:pos_dim] - other_x[:pos_dim]))
                     
                     if agent_idx == 0:  # Ego agent
                         # For ego agent, collision cost is weighted by the mask values of other agents
@@ -235,13 +234,13 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
         if len(other_indices) > 0:
             other_x_trajs = all_x_trajs[other_indices]
         else:
-            other_x_trajs = jnp.zeros((0, T_total, 4))
+            other_x_trajs = jnp.zeros((0, T_total, state_dim))
         
         # Compute gradients w.r.t. state and control
         if len(other_indices) > 0:
             other_x_transposed = other_x_trajs.transpose(1, 0, 2)
         else:
-            other_x_transposed = jnp.zeros((T_total, 0, 4))
+            other_x_transposed = jnp.zeros((T_total, 0, state_dim))
             
         # Use the reference trajectory for this agent (created from goals)
         ref_traj_array = reference_trajectories[agent_idx]
@@ -275,9 +274,9 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
             A_trajs.append(A_traj)
             B_trajs.append(B_traj)
         
-        x_trajs = jnp.stack(x_trajs)  # (n_selected, T_total, 4)
-        A_trajs = jnp.stack(A_trajs)  # (n_selected, T_total, 4, 4)
-        B_trajs = jnp.stack(B_trajs)  # (n_selected, T_total, 4, 2)
+        x_trajs = jnp.stack(x_trajs)  # (n_selected, T_total, state_dim)
+        A_trajs = jnp.stack(A_trajs)  # (n_selected, T_total, state_dim, state_dim)
+        B_trajs = jnp.stack(B_trajs)  # (n_selected, T_total, state_dim, control_dim)
         
         # Step 2: Compute cost gradients for all agents
         a_trajs = []
@@ -290,8 +289,8 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
             a_trajs.append(a_traj)
             b_trajs.append(b_traj)
         
-        a_trajs = jnp.stack(a_trajs)  # (n_selected, T_total, 4)
-        b_trajs = jnp.stack(b_trajs)  # (n_selected, T_total, 2)
+        a_trajs = jnp.stack(a_trajs)  # (n_selected, T_total, state_dim)
+        b_trajs = jnp.stack(b_trajs)  # (n_selected, T_total, control_dim)
         
         # Step 3: Solve LQR subproblems for all agents (like ilqgames_example.py)
         control_updates = []
@@ -299,7 +298,7 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
             v_traj = solve_lqr_subproblem(A_trajs[i], B_trajs[i], a_trajs[i], b_trajs[i], agents[i])
             control_updates.append(v_traj)
         
-        control_updates = jnp.stack(control_updates)  # (n_selected, T_total, 2)
+        control_updates = jnp.stack(control_updates)  # (n_selected, T_total, control_dim)
         
         # Step 4: Update control trajectories
         new_control_trajectories = control_trajectories + step_size * control_updates

@@ -30,6 +30,7 @@ T_reference = config.game.T_total
 agent_type = config.game.agent_type
 opt_config = getattr(config.optimization, agent_type)
 state_dim = opt_config.state_dim
+pos_dim = state_dim // 2  # Position dimension (2 for point agents, 3 for drone agents)
 
 def load_reference_trajectories(data_dir: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Load reference trajectories from directory containing individual JSON files and split into training and validation sets."""
@@ -80,16 +81,16 @@ def extract_observation_trajectory(sample_data: Dict[str, Any], obs_input_type: 
         
     Returns:
         observation_trajectory: Observation trajectory 
-            - If obs_input_type="full": (T_observation, N_agents, 4)
-            - If obs_input_type="partial": (T_observation, N_agents, 2)
+            - If obs_input_type="full": (T_observation, N_agents, state_dim)
+            - If obs_input_type="partial": (T_observation, N_agents, pos_dim)
     """
     # get number of agents in the scene
     n_agents = sample_data['metadata']['n_agents']
     # Determine output dimensions based on observation type
     if obs_input_type == "partial":
-        output_dim = 2  # Only position (x, y)
+        output_dim = pos_dim  # Only position (x, y for point agents, x, y, z for drone agents)
     else:  # "full"
-        output_dim = 4  # Full state (x, y, vx, vy)
+        output_dim = state_dim  # Full state (x, y, vx, vy for point agents; x, y, z, vx, vy, vz for drone agents)
     
     # Initialize array to store all agent states
     # Shape: (T_observation, N_agents, output_dim)
@@ -103,11 +104,11 @@ def extract_observation_trajectory(sample_data: Dict[str, Any], obs_input_type: 
         
         # Extract relevant dimensions based on observation type
         if obs_input_type == "partial":
-            # Only use position (x, y) - first 2 dimensions
-            agent_obs = agent_states[:, :2]  # (T_observation, 2)
+            # Only use position - first pos_dim dimensions
+            agent_obs = agent_states[:, :pos_dim]  # (T_observation, pos_dim)
         else:  # "full"
-            # Use full state (x, y, vx, vy) - all 4 dimensions
-            agent_obs = agent_states[:, :4]  # (T_observation, 4)
+            # Use full state - all state_dim dimensions
+            agent_obs = agent_states[:, :state_dim]  # (T_observation, state_dim)
         
         # Place in the correct position: (T_observation, N_agents, output_dim)
         observation_trajectory = observation_trajectory.at[:, i, :].set(agent_obs)
@@ -132,9 +133,9 @@ def extract_ego_reference_trajectory(sample_data: Dict[str, Any], ego_agent_id: 
 def prepare_batch_for_training(batch_data: List[Dict[str, Any]], obs_input_type: str = "full") -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     # Determine observation dimensions based on input type
     if obs_input_type == "partial":
-        obs_dim = 2  # Only position (x, y)
+        obs_dim = pos_dim  # Only position (x, y for point agents, x, y, z for drone agents)
     else:  # "full"
-        obs_dim = 4  # Full state (x, y, vx, vy)
+        obs_dim = state_dim  # Full state (x, y, vx, vy for point agents; x, y, z, vx, vy, vz for drone agents)
 
     batch_obs = []
     batch_ref_traj = []   
@@ -176,9 +177,9 @@ def prepare_batch_for_training(batch_data: List[Dict[str, Any]], obs_input_type:
 def prepare_batch_for_training_gnn(batch_data: List[Dict[str, Any]], obs_input_type: str = "full") -> Tuple[jnp.ndarray, jnp.ndarray]:
     # Determine observation dimensions based on input type
     if obs_input_type == "partial":
-        obs_dim = 2  # Only position (x, y)
+        obs_dim = pos_dim  # Only position (x, y for point agents, x, y, z for drone agents)
     else:  # "full"
-        obs_dim = 4  # Full state (x, y, vx, vy)
+        obs_dim = state_dim  # Full state (x, y, vx, vy for point agents; x, y, z, vx, vy, vz for drone agents)
 
     batch_obs = []
     batch_ref_traj = []   
@@ -225,7 +226,7 @@ def extract_true_goals_from_batch(batch_data: List[Dict[str, Any]]) -> jnp.ndarr
         batch_data: List of sample data dictionaries
         
     Returns:
-        Array of true goals (batch_size, N_agents * 2)
+        Array of true goals (batch_size, N_agents * pos_dim)
     """
     batch_goals = []
     
@@ -240,19 +241,20 @@ def extract_true_goals_from_batch(batch_data: List[Dict[str, Any]]) -> jnp.ndarr
             # Use the final state position as the goal
             if len(agent_states) > 0:
                 final_state = agent_states[-1]
-                goal_pos = jnp.array([final_state[0], final_state[1]])  # [x, y] from [x, y, vx, vy]
+                # Extract position dimensions (x, y for point agents; x, y, z for drone agents)
+                goal_pos = jnp.array(final_state[:pos_dim])
             else:
                 # Fallback to zero if no states available
-                goal_pos = jnp.array([0.0, 0.0])
+                goal_pos = jnp.zeros(pos_dim)
             
             sample_goals.append(goal_pos)
         
         # Flatten all agent goals into a single array
-        sample_goals_flat = jnp.concatenate(sample_goals)  # (N_agents * 2,)
+        sample_goals_flat = jnp.concatenate(sample_goals)  # (N_agents * pos_dim,)
         batch_goals.append(sample_goals_flat)
     
     # Stack all samples into a batch
-    batch_goals_array = jnp.stack(batch_goals)  # (batch_size, N_agents * 2)
+    batch_goals_array = jnp.stack(batch_goals)  # (batch_size, N_agents * pos_dim)
     return batch_goals_array
 
 # ============================================================================
