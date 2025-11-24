@@ -12,130 +12,14 @@ from models.train_mlp import load_trained_psn_models
 from models.train_gnn import load_trained_gnn_models
 from solver.solve_by_horizon import solve_by_horizon
 from solver.point_agent import PointAgent
+from solver.drone_agent import DroneAgent
 from typing import Any, Dict, List
 import json
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 import pandas as pd
-
-def compute_metrics(
-    x_trajs: jnp.ndarray,
-    control_trajs: jnp.ndarray,
-    simulation_masks: List[jnp.ndarray],
-    all_players_ref_trajs: jnp.ndarray,
-    ref_trajs: jnp.ndarray,
-    observation_horizon: int = 10
-) -> Dict[str, float]:
-    """
-    Compute evaluation metrics from the PSN paper.
-    
-    Args:
-        x_trajs: Trajectory array of shape (N, T, state_dim)
-        control_trajs: Control array of shape (N, T, u_dim)
-        simulation_masks: List of masks for each timestep
-        ref_trajs: Reference trajectories of shape (N, T, 2)
-        observation_horizon: Number of observation timesteps
-    
-    Returns:
-        Dictionary of computed metrics
-    """
-    N, T, state_dim = x_trajs.shape
-    K = observation_horizon
-    
-    metrics = {}
-    
-    # For ego agent (agent 0)
-    ego_traj = x_trajs[0]  # (T, state_dim)
-    ego_control = control_trajs[0]  # (T, u_dim)
-    ego_all_players_ref = all_players_ref_trajs[0]  # (T, 2)
-    ego_ref = ref_trajs[0]  # (T, 2)
-    
-    # ADE: Average Displacement Error (for prediction phase K:K+T) relative to trajectories when all players in mask
-    pred_positions = ego_traj[K:, :2]
-    ego_all_players_ref_positions = ego_all_players_ref[K:, :2]
-    if len(pred_positions) > 0:
-        ade = jnp.mean(jnp.linalg.norm(pred_positions - ego_all_players_ref_positions, axis=1))
-        metrics['ADE'] = float(ade)
-    else:
-        metrics['ADE'] = 0.0
-    
-    # FDE: Final Displacement Error (from intended goal)
-    ego_goal = ego_ref[-1, :2]
-    if len(pred_positions) > 0:
-        fde = jnp.linalg.norm(pred_positions[-1] - ego_goal)
-        metrics['FDE'] = float(fde)
-    else:
-        metrics['FDE'] = 0.0
-    
-    # Navigation Cost: sum of squared distance to reference
-    nav_cost = jnp.sum(jnp.linalg.norm(ego_traj[:, :2] - ego_ref[:, :2], axis=1) ** 2)
-    metrics['Nav_Cost'] = float(nav_cost)
-    
-    # Collision Cost: sum of exponential proximity costs with all other agents
-    col_cost = 0.0
-    for t in range(T):
-        for j in range(1, N):
-            dist_sq = jnp.sum((ego_traj[t, :2] - x_trajs[j, t, :2]) ** 2)
-            col_cost += jnp.exp(-dist_sq)
-    metrics['Col_Cost'] = float(col_cost)
-    
-    # Control Cost: sum of squared control magnitudes
-    ctrl_cost = jnp.sum(jnp.linalg.norm(ego_control, axis=1) ** 2)
-    metrics['Ctrl_Cost'] = float(ctrl_cost)
-    
-    # Trajectory heading change (smoothness): cumulative change in direction
-    traj_h = 0.0
-    for t in range(2, T):
-        if state_dim >= 4:
-            # Use velocity if available
-            v_curr = ego_traj[t, 2:4]
-            v_prev = ego_traj[t-1, 2:4]
-            norm_curr = jnp.linalg.norm(v_curr)
-            norm_prev = jnp.linalg.norm(v_prev)
-            if norm_curr > 1e-6 and norm_prev > 1e-6:
-                dir_curr = v_curr / norm_curr
-                dir_prev = v_prev / norm_prev
-                traj_h += jnp.linalg.norm(dir_curr - dir_prev)
-        else:
-            # Use position differences
-            p_curr = ego_traj[t, :2] - ego_traj[t-1, :2]
-            p_prev = ego_traj[t-1, :2] - ego_traj[t-2, :2]
-            norm_curr = jnp.linalg.norm(p_curr)
-            norm_prev = jnp.linalg.norm(p_prev)
-            if norm_curr > 1e-6 and norm_prev > 1e-6:
-                dir_curr = p_curr / norm_curr
-                dir_prev = p_prev / norm_prev
-                traj_h += jnp.linalg.norm(dir_curr - dir_prev)
-    metrics['Traj_Heading'] = float(traj_h)
-    
-    # Trajectory length: total distance traveled
-    traj_l = jnp.sum(jnp.linalg.norm(jnp.diff(ego_traj[:, :2], axis=0), axis=1))
-    metrics['Traj_Length'] = float(traj_l)
-    
-    # Minimum distance: safety metric (higher is better)
-    min_dist = float('inf')
-    for t in range(T):
-        for j in range(1, N):
-            dist = jnp.linalg.norm(ego_traj[t, :2] - x_trajs[j, t, :2])
-            min_dist = min(min_dist, float(dist))
-    metrics['Min_Dist'] = min_dist
-    
-    # Consistency: how stable the mask selection is over time
-    if len(simulation_masks) > 1:
-        consistency = 0.0
-        for t in range(1, len(simulation_masks)):
-            mask_diff = jnp.sum(jnp.abs(simulation_masks[t] - simulation_masks[t-1]))
-            consistency += 1 - (mask_diff / (N - 1))
-        consistency /= (len(simulation_masks) - 1)
-        metrics['Consistency'] = float(consistency)
-    else:
-        metrics['Consistency'] = 1.0
-    
-    # Additional useful metrics
-    metrics['Avg_Num_Players_Selected'] = float(jnp.mean(jnp.array([jnp.sum(m) for m in simulation_masks])))
-    
-    return metrics
+from eval.compute_metrics import compute_metrics
 
 def load_dataset(dataset_path: str) -> List[Dict]:
     """Load all JSON files from the dataset directory."""
@@ -174,6 +58,7 @@ def eval_model(
     top_k_mask = kwargs.get("top_k_mask", 3)
     pos_dim = kwargs.get("pos_dim", 2)
     eval_all_methods = kwargs.get("eval_all_methods", False)
+    test_mode = kwargs.get("test_mode", False)
 
     # Load dataset
     print(f"Loading dataset from {dataset_path}...")
@@ -206,15 +91,16 @@ def eval_model(
     # Evaluate each sample
     for sample_idx, sample in enumerate(tqdm(dataset, desc="Evaluating samples")):
         n_agents = sample["n_agents"]
-        init_ps_2d = jnp.array(sample["init_ps"])
+        init_ps_raw = jnp.array(sample["init_ps"])
         goals = jnp.array(sample["init_goals"])
         
-        # Convert to 4D state (x, y, vx, vy)
-        init_ps = jnp.array([jnp.array([init_ps_2d[i][0], init_ps_2d[i][1], 0.0, 0.0]) for i in range(n_agents)])
+        # add velocity to initial positions
+        init_ps = jnp.array([jnp.array(init_ps_raw[i][:pos_dim].tolist() + [0.0] * pos_dim) for i in range(n_agents)])
         
         # Create agents
+        agent_class = PointAgent if agent_type == "point" else DroneAgent
         agents = [
-            PointAgent(
+            agent_class(
                 dt, x_dim=x_dim, u_dim=u_dim, Q=Q, R=R, 
                 collision_weight=collision_weight, 
                 collision_scale=collision_scale, 
@@ -229,7 +115,7 @@ def eval_model(
             agent.create_loss_function_mask()
         
         # Create reference trajectories
-        ref_trajs = jnp.array([jnp.linspace(init_ps[i][:2], goals[i], tsteps) for i in range(n_agents)])
+        ref_trajs = jnp.array([jnp.linspace(init_ps[i][:pos_dim], goals[i], tsteps) for i in range(n_agents)])
         
         # Evaluate each method
 
@@ -324,6 +210,9 @@ def eval_model(
                 print(f"\nError on sample {sample_idx} with method {method}: {e}")
                 import traceback
                 traceback.print_exc()
+        
+        if test_mode and sample_idx >= 5:
+            break
     
     # Aggregate results
     print("\n" + "="*80)
@@ -394,7 +283,7 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # TOGGLE FOR EVALUATING ALL METHODS
-    eval_all_methods = False
+    eval_all_methods = True
     
     # Extract parameters from configuration
     dt = config.game.dt
@@ -417,10 +306,12 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(opt_config.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_epochs_50_loss_type_ego_agent_cost/20251107_202434/psn_best_model.pkl"
+    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.1_sigma2_0.1_epochs_50_loss_type_similarity/20251121_223914/psn_best_model.pkl"
     model_type = "gnn"  
     dataset_path = f"src/data/{agent_type}_agent_data/eval_data_upto_20p"
     top_k_mask = 2
+
+    TEST_MODE = False 
 
     args = {
         "model_path": model_path,
@@ -445,6 +336,7 @@ if __name__ == "__main__":
         "top_k_mask": top_k_mask,
         "pos_dim": opt_config.state_dim // 2,
         "eval_all_methods": eval_all_methods,
+        "test_mode": TEST_MODE,
     }
 
     eval_model(**args)

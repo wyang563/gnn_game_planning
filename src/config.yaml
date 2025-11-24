@@ -10,11 +10,7 @@ game:
   ego_agent_id: 0           # ID of the ego agent (usually 0)
   
   # State and control dimensions
-  agent_type: "point"
-
-  # TODO: remove state_dim and control_dim eventually to make it dynamic based on agent_type
-  state_dim: 4              # [x, y, vx, vy] for point mass agents
-  control_dim: 2            # [ax, ay] for point mass agents
+  agent_type: "drone"
   
   # Environment parameters
   boundary_size_4p: 2.5
@@ -30,7 +26,7 @@ optimization:
     step_size: 0.005          # Step size for gradient descent
     
     navigation_weight: 1.0    # Weight for navigation cost
-    collision_weight: 2.0     # Weight for collision avoidance
+    collision_weight: 10.0     # Weight for collision avoidance
     collision_scale: 1.0      # Scale factor in exponential collision cost
     control_weight: 0.1       # Weight for control cost
 
@@ -46,11 +42,16 @@ optimization:
     step_size: 0.005          # Step size for gradient descent
     
     navigation_weight: 1.0    # Weight for navigation cost
-    collision_weight: 10.0     # Weight for collision avoidance
-    collision_scale: 1.0      # Scale factor in exponential collision cost
-    control_weight: 0.001       # Weight for control cost
+    collision_weight: 10.0     # Weight for collision avoidance (matching point agent)
+    collision_scale: 1.0      # Scale factor in exponential collision cost (matching point agent)
+    control_weight: 0.001       # Weight for control cost (matching point agent)
 
+    # Q weights: [x, y, z, vx, vy, vz]
+    # Position weights should be similar, velocity weights smaller
     Q: [0.1, 0.1, 0.1, 0.001, 0.001, 0.001]
+    
+    # R weights: [ax, ay, az]
+    # Note: control cost now penalizes (ax, ay, az-g) so these can match point agent
     R: [0.01, 0.01, 0.01]
 
     state_dim: 6
@@ -122,8 +123,8 @@ gnn:
   dropout_rate: 0.3
 
   # Loss function weights
-  sigma1: 1.0               # Weight for mask sparsity loss
-  sigma2: 1.0              # Weight for mask binary loss
+  sigma1: 0.8               # Weight for mask sparsity loss
+  sigma2: 0.8              # Weight for mask binary loss
 
   # graph edge creation parameters
   edge_metric: "barrier-function" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
@@ -298,7 +299,7 @@ debug:
 # ============================================================================
 device:
   # Device selection
-  preferred_device: "cpu"   # Preferred device ["gpu", "cpu", "auto"]
+  preferred_device: "gpu"   # Preferred device ["gpu", "cpu", "auto"]
   
   # JAX configuration
   jax_platform_name: null  # JAX platform name (null = auto-detect)

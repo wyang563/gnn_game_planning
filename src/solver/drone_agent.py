@@ -19,7 +19,7 @@ class DroneAgent(iLQR):
             x[5],  # dz/dt = vz
             u[0],  # dvx/dt = ax
             u[1],  # dvy/dt = ay
-            u[2] - self.g   # ddz/dt = az
+            u[2] - self.g
         ])
 
     def create_loss_function_mask(self):
@@ -32,7 +32,10 @@ class DroneAgent(iLQR):
             collision_loss = collision_loss * mask
             collision_loss = jnp.sum(collision_loss)
 
-            ctrl_loss = self.ctrl_weight * jnp.sum(jnp.square(ut))
+            # Penalize deviation from hover thrust in z, not absolute thrust
+            # For xy, penalize absolute control; for z, penalize deviation from gravity compensation
+            # ctrl_loss = self.ctrl_weight * (jnp.square(ut[0]) + jnp.square(ut[1]) + jnp.square(ut[2]))
+            ctrl_loss = self.ctrl_weight * (jnp.square(ut[0]) + jnp.square(ut[1]) + jnp.square(ut[2] - self.g))
             return nav_loss + collision_loss + ctrl_loss
         
         def trajectory_loss(x_traj, u_traj, ref_x_traj, other_x_trajs, mask):
@@ -69,7 +72,10 @@ class DroneAgent(iLQR):
             collision_loss = self.collision_weight * jnp.exp(-self.collision_scale * squared_distances)
             collision_loss = jnp.sum(collision_loss)
 
-            ctrl_loss = self.ctrl_weight * jnp.sum(jnp.square(ut))
+            # Penalize deviation from hover thrust in z, not absolute thrust
+            # For xy, penalize absolute control; for z, penalize deviation from gravity compensation
+            # ctrl_loss = self.ctrl_weight * (jnp.square(ut[0]) + jnp.square(ut[1]) + jnp.square(ut[2]))
+            ctrl_loss = self.ctrl_weight * (jnp.square(ut[0]) + jnp.square(ut[1]) + jnp.square(ut[2] - self.g))
             return nav_loss + collision_loss + ctrl_loss
         
         def trajectory_loss(x_traj, u_traj, ref_x_traj, other_x_trajs):

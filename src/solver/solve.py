@@ -23,6 +23,8 @@ from load_config import (
     ConfigLoader,
 )
 
+from eval.compute_metrics import compute_minimum_distance
+
 from utils.goal_init import (
     origin_init_collision,
     random_init,
@@ -260,71 +262,6 @@ def save_trajectory_sample(sample_id: int, n_agents: int, tsteps: int, dt: float
     
     return sample_data
 
-def plot_sample_trajectories(n_agents: int, sample_data: Dict[str, Any], boundary_size: float, save_path: str = None):
-    """
-    Plot trajectories for a single sample with proper boundary scaling.
-    
-    Args:
-        sample_data: Sample data dictionary
-        boundary_size: Size of the environment boundary for consistent scaling
-        save_path: Path to save the plot (optional)
-    """
-    init_positions = np.array(sample_data["init_positions"])
-    target_positions = np.array(sample_data["target_positions"])
-    trajectories = sample_data["trajectories"]
-    
-    fig, ax = plt.subplots(1, 1, figsize=(10, 10))  # Square figure for equal aspect
-    
-    # Plot trajectories
-    colors = plt.cm.tab10(np.linspace(0, 1, n_agents))
-    
-    for i in range(n_agents):
-        agent_key = f"agent_{i}"
-        states = np.array(trajectories[agent_key]["states"])
-        
-        # Extract positions
-        positions = states[:, :2]  # (tsteps, 2)
-        
-        # Plot trajectory
-        ax.plot(positions[:, 0], positions[:, 1], 
-               color=colors[i], linewidth=2, label=f'Agent {i}', alpha=0.8)
-        
-        # Plot start and end points
-        ax.scatter(init_positions[i, 0], init_positions[i, 1], 
-                  color=colors[i], s=120, marker='o', edgecolors='black', 
-                  linewidth=2, label=f'Start {i}' if i == 0 else "")
-        ax.scatter(target_positions[i, 0], target_positions[i, 1], 
-                  color=colors[i], s=120, marker='*', edgecolors='black',
-                  linewidth=2, label=f'Goal {i}' if i == 0 else "")
-    
-    # Set axis limits to show full boundary with small margin
-    margin = 0.1
-    ax.set_xlim(-boundary_size - margin, boundary_size + margin)
-    ax.set_ylim(-boundary_size - margin, boundary_size + margin)
-    
-    # Draw boundary rectangle
-    boundary_rect = plt.Rectangle((-boundary_size, -boundary_size), 
-                                 2*boundary_size, 2*boundary_size,
-                                 fill=False, edgecolor='gray', linewidth=2, 
-                                 linestyle='--', alpha=0.5)
-    ax.add_patch(boundary_rect)
-    
-    ax.set_xlabel('X Position (m)', fontsize=12)
-    ax.set_ylabel('Y Position (m)', fontsize=12)
-    ax.set_title(f'Agent Trajectories (N={n_agents}, Boundary=±{boundary_size}m)', fontsize=14)
-    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-    ax.grid(True, alpha=0.3)
-    ax.set_aspect('equal')
-    
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        # print(f"Plot saved to: {save_path}")
-    
-    # Don't show the plot during generation
-    plt.close()
-
 if __name__ == "__main__":
     config = load_config()
     setup_jax_config()
@@ -349,14 +286,16 @@ if __name__ == "__main__":
     Q = jnp.diag(jnp.array(opt_config.Q))
     R = jnp.diag(jnp.array(opt_config.R))
 
+    x_dim, u_dim = opt_config.state_dim, opt_config.control_dim
+    weights = (opt_config.collision_weight, opt_config.collision_scale, opt_config.control_weight)
+
     print(f"Configuration loaded:")
     print(f"  N agents: {n_agents}")
     print(f"  Time steps: {tsteps}, dt: {dt}")
     print(f"  Optimization: {num_iters} iters, step size: {step_size}")
     print(f"  Boundary size: {boundary_size}")
+    print(f"  weights: {weights}")
 
-    x_dim, u_dim = opt_config.state_dim, opt_config.control_dim
-    weights = (opt_config.collision_weight, opt_config.collision_scale, opt_config.control_weight)
 
     # create agent setup
     agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, agent_class, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
@@ -364,6 +303,10 @@ if __name__ == "__main__":
     # state_trajs, control_trajs, total_time = solve_ilqgames_sequential(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size)
     state_trajs, control_trajs, total_time = solve_ilqgames_parallel_no_mask(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)
     print(f"Total solve time: {total_time}")
+
+
+    min_distance = compute_minimum_distance(jnp.array(state_trajs), pos_dim=x_dim//2)
+    print(f"Minimum distance: {min_distance}")
 
     # get plot functions
     agent_plot_functions = agent_type_to_plot_functions(config.game.agent_type)

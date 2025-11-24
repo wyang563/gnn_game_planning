@@ -185,6 +185,7 @@ def random_init(n_agents: int,
         
         # If we couldn't find a valid position after max_tries, use the last candidate
         if init_pos is None:
+            print("FAILED TO FIND A VALID INITIAL POSITION")
             init_pos = candidate_pos
         
         init_ps.append(init_pos)

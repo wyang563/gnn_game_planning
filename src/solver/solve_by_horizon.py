@@ -21,7 +21,7 @@ from solver.point_agent import PointAgent
 from load_config import load_config, setup_jax_config, get_device_config, ConfigLoader
 from solver.solve import create_batched_loss_functions_mask, solve_ilqgames_parallel_mask
 from flax import linen as nn
-from utils.goal_init import random_init
+from utils.goal_init import random_init, origin_init_collision
 from models.train_gnn import GNNSelectionNetwork, load_trained_gnn_models
 from models.train_mlp import PlayerSelectionNetwork, load_trained_psn_models
 from tqdm import tqdm
@@ -29,6 +29,7 @@ from utils.plot import plot_point_agent_trajs, plot_point_agent_gif
 # from eval.baselines import nearest_neighbors, jacobian, cost_evolution, barrier_function
 from models.policies import nearest_neighbors_top_k, jacobian_top_k, barrier_function_top_k, cost_evolution_top_k
 from utils.agent_selection_utils import agent_type_to_agent_class, agent_type_to_plot_functions
+from eval.compute_metrics import compute_minimum_distance 
 
 # this is the sequential version so we can calculate compute performance metrics
 def solve_by_horizon_sequential(
@@ -341,6 +342,12 @@ if __name__ == "__main__":
     x_dim = opt_config.state_dim
     pos_dim = x_dim // 2
     u_dim = opt_config.control_dim
+
+    # CUSTOM CONFIGS
+    tsteps = 100
+    n_agents = 10 
+    num_iters = 150 
+
     print("Optimization parameters:")
     print(f"  agent_type: {agent_type}")
     print(f"  tsteps: {tsteps}")
@@ -351,8 +358,16 @@ if __name__ == "__main__":
     print(f"  control_weight: {control_weight}")
 
     # genera random inits
-    boundary_size = 3.5
-    init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
+    # boundary_size = 1.75 * n_agents**0.5
+    boundary_size = 5.0
+    match init_type:
+        case "random":
+            init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
+        case "origin":
+            init_ps, goals = origin_init_collision(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
+        case _:
+            raise ValueError(f"Invalid init type: {init_type}")
+        
     if x_dim == 4:
         init_ps = jnp.array([jnp.array([init_ps[i][0], init_ps[i][1]] + [0.0] * (pos_dim)) for i in range(n_agents)])
     elif x_dim == 6:
@@ -377,7 +392,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_epochs_50_loss_type_ego_agent_cost/20251110_201139/psn_best_model.pkl"
+    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.1_sigma2_0.1_epochs_50_loss_type_similarity/20251121_223914/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
     use_only_ego_masks = False 
 
@@ -385,6 +400,7 @@ if __name__ == "__main__":
     # mask_mag = 5
     # model = None
     # model_state = None
+    
 
     # solve by horizon
     final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(
@@ -409,14 +425,23 @@ if __name__ == "__main__":
         collision_scale=collision_scale,
     )
 
+    # calculate minimum distance
+    min_distance = compute_minimum_distance(final_x_trajs, pos_dim=pos_dim)
+    print(f"Minimum distance: {min_distance}")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = f"log/solve_by_horizon_run/{timestamp}"
     os.makedirs(out_dir, exist_ok=True)
     plot_save_path = os.path.join(out_dir, "test.png")
-    gif_save_path = os.path.join(out_dir, "test.gif")
+    traj_gif_save_path = os.path.join(out_dir, "traj_test.gif")
+    mask_gif_save_path = os.path.join(out_dir, "mask_test.gif")
 
     plot_functions = agent_type_to_plot_functions(agent_type)
 
+    print(f"Creating Trajectory Plot")
     plot_functions["plot_traj"](final_x_trajs, goals, init_ps, save_path=plot_save_path)
-    plot_functions["plot_mask_gif"](final_x_trajs, goals, init_ps, simulation_masks, 0, gif_save_path)
+    print(f"Creating Trajectory GIF")
+    plot_functions["plot_traj_gif"](final_x_trajs, goals, init_ps, save_path=traj_gif_save_path)
+    print(f"Creating Mask GIF")
+    plot_functions["plot_mask_gif"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_gif_save_path)
 

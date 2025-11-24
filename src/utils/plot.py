@@ -104,9 +104,155 @@ def plot_point_agent_trajs(trajs, goals, init_points, ax=None, title: Optional[s
     plt.close()
 
 
-def plot_point_agent_trajs_gif(trajs, goals, init_points, ax=None, title: Optional[str] = None, 
-               show_legend: bool = True, save_path: Optional[str] = None):
-    pass
+def plot_point_agent_trajs_gif(trajs, goals, init_points, save_path: str, 
+                               fps: int = 10, figsize: tuple = (12, 10), 
+                               title: Optional[str] = None):
+    """
+    Create a GIF animation showing point agent trajectories gradually traced out over time.
+    
+    Args:
+        trajs: Array of shape (n_agents, n_timesteps, 2) or (n_agents, n_timesteps, 4+)
+               containing the trajectories (x, y positions, possibly with velocities)
+        goals: Array of shape (n_agents, 2) containing goal positions for each agent
+        init_points: Array of shape (n_agents, 2) containing initial positions for each agent
+        save_path: str, path to save the GIF file (required)
+        fps: int, frames per second for the GIF (default: 10)
+        figsize: tuple, figure size (default: (12, 10))
+        title: Optional title for the plot
+    """
+    # Convert to numpy arrays if needed
+    trajs = np.array(trajs)
+    goals = np.array(goals)
+    init_points = np.array(init_points)
+    
+    # Extract position data (first 2 columns if state includes velocity)
+    if trajs.shape[-1] > 2:
+        positions = trajs[:, :, :2]
+    else:
+        positions = trajs
+    
+    n_agents, n_timesteps, _ = positions.shape
+    
+    # Auto-calculate axis limits
+    all_x = np.concatenate([
+        positions[:, :, 0].flatten(),
+        goals[:, 0],
+        init_points[:, 0]
+    ])
+    all_y = np.concatenate([
+        positions[:, :, 1].flatten(),
+        goals[:, 1],
+        init_points[:, 1]
+    ])
+    
+    # Calculate ranges with padding (15% of the range)
+    x_min, x_max = all_x.min(), all_x.max()
+    y_min, y_max = all_y.min(), all_y.max()
+    
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    
+    x_padding = max(0.15 * x_range, 0.5)
+    y_padding = max(0.15 * y_range, 0.5)
+    
+    xlim = (x_min - x_padding, x_max + x_padding)
+    ylim = (y_min - y_padding, y_max + y_padding)
+    
+    # Get colors for each agent using hsv colormap
+    colors = plt.cm.hsv(np.linspace(0, 1, n_agents))
+    
+    print(f"Creating GIF with {n_timesteps} frames...")
+    
+    # Generate all frames
+    frames = []
+    for step in range(n_timesteps):
+        fig, ax = plt.subplots(figsize=figsize)
+        
+        # Set axis limits
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_aspect('equal', adjustable='box')
+        
+        # Title
+        if title:
+            ax.set_title(f'{title} - Step {step+1}/{n_timesteps}', fontsize=12, fontweight='bold')
+        else:
+            ax.set_title(f'Point Agent Trajectories - Step {step+1}/{n_timesteps}', 
+                        fontsize=12, fontweight='bold')
+        ax.set_xlabel('X Position (m)', fontsize=10)
+        ax.set_ylabel('Y Position (m)', fontsize=10)
+        
+        # Plot trajectories for all agents (gradually accumulated up to current step)
+        for i in range(n_agents):
+            color = colors[i]
+            # Only plot trajectory up to current step
+            traj = positions[i, :step+1, :]
+            
+            if len(traj) > 1:
+                ax.plot(traj[:, 0], traj[:, 1],
+                       color=color, linewidth=2, alpha=0.8, label=f'Agent {i}')
+        
+        # Plot current positions
+        for i in range(n_agents):
+            color = colors[i]
+            current_pos = positions[i, step, :]
+            
+            # Plot current position as a circle
+            ax.scatter(current_pos[0], current_pos[1],
+                      color=color, s=100, marker='o', edgecolors='black',
+                      linewidth=2, alpha=0.9, zorder=5)
+        
+        # Plot start points (initial positions)
+        for i in range(n_agents):
+            color = colors[i]
+            ax.scatter(init_points[i, 0], init_points[i, 1],
+                      color=color, s=120, marker='o', edgecolors='black',
+                      linewidth=2, alpha=0.8, zorder=5)
+            
+            # Add text label for start point
+            ax.text(init_points[i, 0], init_points[i, 1], f' {i}',
+                   fontsize=9, ha='left', va='bottom',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, 
+                            edgecolor='black', linewidth=0.5))
+        
+        # Plot goal points
+        for i in range(n_agents):
+            color = colors[i]
+            ax.scatter(goals[i, 0], goals[i, 1],
+                      color=color, s=200, marker='*', edgecolors='black',
+                      linewidth=2, alpha=0.8, zorder=5)
+            
+            # Add text label for goal point
+            ax.text(goals[i, 0], goals[i, 1], f' {i}',
+                   fontsize=9, ha='left', va='top',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7, 
+                            edgecolor='black', linewidth=0.5))
+        
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        # Convert to PIL Image
+        fig.canvas.draw()
+        buf = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8)
+        buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (4,))
+        img = Image.fromarray(buf, 'RGBA')
+        
+        frames.append(img)
+        plt.close(fig)
+        
+        if (step + 1) % 10 == 0 or step == n_timesteps - 1:
+            print(f"  Generated frame {step + 1}/{n_timesteps}")
+    
+    # Save as GIF
+    print(f"Saving GIF to: {save_path}")
+    frames[0].save(
+        save_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=1000//fps,  # Convert fps to duration in ms
+        loop=0
+    )
+    print(f"✓ GIF created successfully!")
 
 def plot_point_agent_gif(trajectories, goals, init_positions, simulation_masks, ego_agent_id, 
                    save_path, fps=10, figsize=(12, 10), xlim=None, ylim=None):
