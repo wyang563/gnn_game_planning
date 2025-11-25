@@ -44,7 +44,7 @@ optimization:
     navigation_weight: 1.0    # Weight for navigation cost
     collision_weight: 10.0     # Weight for collision avoidance (matching point agent)
     collision_scale: 1.0      # Scale factor in exponential collision cost (matching point agent)
-    control_weight: 0.001       # Weight for control cost (matching point agent)
+    control_weight: 0.1       # Weight for control cost (matching point agent)
 
     # Q weights: [x, y, z, vx, vy, vz]
     # Position weights should be similar, velocity weights smaller
@@ -123,11 +123,13 @@ gnn:
   dropout_rate: 0.3
 
   # Loss function weights
-  sigma1: 0.8               # Weight for mask sparsity loss
-  sigma2: 0.8              # Weight for mask binary loss
+  sigma1: 1.0               # Weight for mask sparsity loss
+  sigma2: 1.0              # Weight for mask binary loss
+  sigma3: 0.5              # Weight for consistency loss
+  noise_std: 0.02
 
   # graph edge creation parameters
-  edge_metric: "barrier-function" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
+  edge_metric: "full" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
   edge_metric_top_k: 5 # number of top values to consider
 
   # message passing rounds
@@ -299,7 +301,7 @@ debug:
 # ============================================================================
 device:
   # Device selection
-  preferred_device: "gpu"   # Preferred device ["gpu", "cpu", "auto"]
+  preferred_device: "cpu"   # Preferred device ["gpu", "cpu", "auto"]
   
   # JAX configuration
   jax_platform_name: null  # JAX platform name (null = auto-detect)

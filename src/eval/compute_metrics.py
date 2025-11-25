@@ -288,7 +288,7 @@ def compute_metrics(
     
     # Compute all metrics using individual functions
     metrics = {
-        'ADE': compute_ade(ego_traj, ego_all_players_ref, observation_horizon, pos_dim),
+        'ADE': compute_ade(ego_traj, ego_all_players_ref, pos_dim),
         'FDE': compute_fde(ego_traj, ego_ref, observation_horizon, pos_dim),
         'Nav_Cost': compute_navigation_cost(ego_traj, ego_ref, pos_dim),
         'Col_Cost': compute_collision_cost(ego_traj, x_trajs, pos_dim),

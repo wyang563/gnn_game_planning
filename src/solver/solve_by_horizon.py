@@ -345,11 +345,12 @@ if __name__ == "__main__":
 
     # CUSTOM CONFIGS
     tsteps = 100
-    n_agents = 10 
+    n_agents = 25 
     num_iters = 150 
 
     print("Optimization parameters:")
     print(f"  agent_type: {agent_type}")
+    print(f"  n_agents: {n_agents}")
     print(f"  tsteps: {tsteps}")
     print(f"  num_iters: {num_iters}")
     print(f"  step_size: {step_size}")
@@ -358,8 +359,7 @@ if __name__ == "__main__":
     print(f"  control_weight: {control_weight}")
 
     # genera random inits
-    # boundary_size = 1.75 * n_agents**0.5
-    boundary_size = 5.0
+    boundary_size = 1.35 * n_agents**0.5
     match init_type:
         case "random":
             init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
@@ -392,7 +392,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.1_sigma2_0.1_epochs_50_loss_type_similarity/20251121_223914/psn_best_model.pkl"
+    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251124_194516/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
     use_only_ego_masks = False 
 

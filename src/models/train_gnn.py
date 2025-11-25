@@ -61,6 +61,8 @@ learning_rate = config.gnn.learning_rate
 batch_size = config.gnn.batch_size
 sigma1 = config.gnn.sigma1  
 sigma2 = config.gnn.sigma2  
+sigma3 = config.gnn.sigma3  
+noise_std = config.gnn.noise_std
 num_message_passing_rounds = config.gnn.num_message_passing_rounds
 edge_metric = config.gnn.edge_metric
 edge_metric_top_k = config.gnn.edge_metric_top_k
@@ -528,38 +530,77 @@ def create_train_state(model: nn.Module, optimizer: optax.GradientTransformation
     
     return state
 
+def generate_noise(rng_noise, observations, noise_std):
+    # Compute per-dimension statistics across the batch
+    # Shape: (state_dim,) - statistics across all batch samples, time steps, and agents
+    batch_std = jnp.std(observations, axis=(0, 1, 2), keepdims=True)
+
+    # Avoid division by zero - use minimum std of 1e-6
+    batch_std = jnp.maximum(batch_std, 1e-6)
+
+    # Generate standard Gaussian noise
+    standard_noise = jax.random.normal(rng_noise, observations.shape)
+
+    # Scale noise by the actual data distribution
+    # noise_std acts as a scaling factor (e.g., 0.02 means 2% of the batch std)
+    data_aware_noise = standard_noise * batch_std * noise_std
+    return data_aware_noise
+
 def train_step(
     state: train_state.TrainState,
     batch: Tuple[jnp.ndarray, jnp.ndarray],
     batch_data: List[Dict[str, Any]],
     sigma1: float,
     sigma2: float,
+    sigma3: float,
+    noise_std: float,
     rng: jnp.ndarray = None,
     loss_type: str = "similarity",
     obs_input_type: str = "full"
-) -> Tuple[train_state.TrainState, jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
+) -> Tuple[train_state.TrainState, jnp.ndarray, Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]]:
 
     observations, reference_trajectories = batch
 
     def loss_fn_similarity(params):
-        predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
+        rng_dropout, rng_noise = jax.random.split(rng)
+        predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng_dropout}, deterministic=False)
         prediced_ego_mask = predicted_masks[:, ego_agent_id, :]
         predicted_goals = extract_true_goals_from_batch(batch_data)
         binary_loss_val = binary_loss(prediced_ego_mask)
         sparsity_loss_val = mask_sparsity_loss(prediced_ego_mask)
         similarity_loss_val = batch_similarity_loss(prediced_ego_mask, predicted_goals, batch_data, obs_input_type=obs_input_type)
-        total_loss = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
-        return total_loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val)
+        if sigma3 > 0.0:
+            noise = generate_noise(rng_noise, observations, noise_std)
+            perturbed_observations = observations + noise
+            perturbed_predicted_masks = state.apply_fn({'params': params}, perturbed_observations, rngs={'dropout': rng_dropout}, deterministic=False)
+            perturbed_ego_mask = perturbed_predicted_masks[:, ego_agent_id, :]
+
+            # Consistency loss: L2 distance between original and perturbed outputs
+            consistency_loss_val = jnp.mean(jnp.square(prediced_ego_mask - perturbed_ego_mask))
+
+        total_loss = similarity_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val + sigma3 * consistency_loss_val
+        return total_loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val, consistency_loss_val)
     
     def loss_fn_ego_cost(params):
-        predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng}, deterministic=False)
+        rng_dropout, rng_noise = jax.random.split(rng)
+        predicted_masks = state.apply_fn({'params': params}, observations, rngs={'dropout': rng_dropout}, deterministic=False)
         prediced_ego_mask = predicted_masks[:, ego_agent_id, :]
         predicted_goals = extract_true_goals_from_batch(batch_data)
         binary_loss_val = binary_loss(prediced_ego_mask)
         sparsity_loss_val = mask_sparsity_loss(prediced_ego_mask)
         ego_cost_loss_val = batch_ego_agent_cost(prediced_ego_mask, predicted_goals, batch_data, obs_input_type=obs_input_type, apply_masks=False)
-        total_loss = ego_cost_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val
-        return total_loss, (binary_loss_val, sparsity_loss_val, ego_cost_loss_val)
+
+        if sigma3 > 0.0:
+            noise = generate_noise(rng_noise, observations, noise_std)
+            perturbed_observations = observations + noise
+            perturbed_predicted_masks = state.apply_fn({'params': params}, perturbed_observations, rngs={'dropout': rng_dropout}, deterministic=False)
+            perturbed_ego_mask = perturbed_predicted_masks[:, ego_agent_id, :]
+
+            # Consistency loss: L2 distance between original and perturbed outputs
+            consistency_loss_val = jnp.mean(jnp.square(prediced_ego_mask - perturbed_ego_mask))
+
+        total_loss = ego_cost_loss_val + sigma1 * sparsity_loss_val + sigma2 * binary_loss_val + sigma3 * consistency_loss_val
+        return total_loss, (binary_loss_val, sparsity_loss_val, ego_cost_loss_val, consistency_loss_val)
     
     if loss_type == "similarity":
         (loss, loss_components), grads = jax.value_and_grad(loss_fn_similarity, has_aux=True)(state.params)
@@ -658,6 +699,8 @@ def train_gnn(
     learning_rate: float,
     sigma1: float,
     sigma2: float,
+    sigma3: float,
+    noise_std: float,
     batch_size: int,
     obs_input_type: str,
     num_message_passing_rounds: int,
@@ -710,6 +753,7 @@ def train_gnn(
     binary_losses = []
     sparsity_losses = []
     similarity_losses = []
+    consistency_losses = []
     validation_binary_losses = []
     validation_sparsity_losses = []
     validation_similarity_losses = []
@@ -721,6 +765,7 @@ def train_gnn(
     print(f"Starting GNN training...")
     print(f"Training parameters: epochs={num_epochs}, lr={learning_rate}, batch_size={batch_size}")
     print(f"Loss weights: σ1={sigma1}, σ2={sigma2}")
+    print(f"Consistency weight: {sigma3} with noise std {noise_std}")
     print(f"Edge metric: {edge_metric}")
     print(f"Edge metric top-k: {edge_metric_top_k}")
     print(f"Training data: {len(training_data)} samples")
@@ -741,6 +786,7 @@ def train_gnn(
         epoch_binary_losses = []
         epoch_sparsity_losses = []
         epoch_similarity_losses = []
+        epoch_consistency_losses = []
 
         # setup data batches
         training_data_batches = organize_batches(training_data_by_n_agents)
@@ -756,12 +802,14 @@ def train_gnn(
             batch_data = training_data_batches[batch_idx]
             observations, reference_trajectories = prepare_batch_for_training_gnn(batch_data, obs_input_type)
             rng, step_key = jax.random.split(rng)
-            state, loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val) = train_step(
+            state, loss, (binary_loss_val, sparsity_loss_val, similarity_loss_val, consistency_loss_val) = train_step(
                 state,
                 (observations, reference_trajectories),
                 batch_data,
                 sigma1,
                 sigma2,
+                sigma3,
+                noise_std,
                 step_key,
                 loss_type,
                 obs_input_type
@@ -771,13 +819,15 @@ def train_gnn(
             epoch_binary_losses.append(float(binary_loss_val))
             epoch_sparsity_losses.append(float(sparsity_loss_val))
             epoch_similarity_losses.append(float(similarity_loss_val))
+            epoch_consistency_losses.append(float(consistency_loss_val))
 
             # Update batch progress bar
             batch_pbar.set_postfix({
                 'Loss': f'{float(loss):.4f}',
                 'Binary': f'{float(binary_loss_val):.4f}',
                 'Sparsity': f'{float(sparsity_loss_val):.4f}',
-                'Similarity': f'{float(similarity_loss_val):.4f}'
+                'Similarity': f'{float(similarity_loss_val):.4f}',
+                'Consistency': f'{float(consistency_loss_val):.4f}'
             })
             batch_pbar.update(1)
 
@@ -811,10 +861,12 @@ def train_gnn(
         avg_binary_loss = sum(epoch_binary_losses) / len(epoch_binary_losses)
         avg_sparsity_loss = sum(epoch_sparsity_losses) / len(epoch_sparsity_losses)
         avg_similarity_loss = sum(epoch_similarity_losses) / len(epoch_similarity_losses)
+        avg_consistency_loss = sum(epoch_consistency_losses) / len(epoch_consistency_losses)
         training_losses.append(avg_loss)
         binary_losses.append(avg_binary_loss)
         sparsity_losses.append(avg_sparsity_loss)
         similarity_losses.append(avg_similarity_loss)
+        consistency_losses.append(avg_consistency_loss)
 
         # Track best model based on validation loss
         if val_loss < best_loss:
@@ -851,6 +903,7 @@ def train_gnn(
         writer.add_scalar('Loss/Epoch/Binary', avg_binary_loss, epoch)
         writer.add_scalar('Loss/Epoch/Sparsity', avg_sparsity_loss, epoch)
         writer.add_scalar('Loss/Epoch/Similarity', avg_similarity_loss, epoch)
+        writer.add_scalar('Loss/Epoch/Consistency', avg_consistency_loss, epoch)
         writer.add_scalar('Loss/Epoch/Validation_Binary', val_binary_loss, epoch)
         writer.add_scalar('Loss/Epoch/Validation_Sparsity', val_sparsity_loss, epoch)
         writer.add_scalar('Loss/Epoch/Validation_Similarity', val_similarity_loss, epoch)
@@ -889,7 +942,7 @@ def train_gnn(
     
     print(f"\nTraining completed! Best model found at epoch {best_epoch + 1} with loss: {best_loss:.4f}")
     
-    return training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, state, best_loss, best_epoch
+    return training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, consistency_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, validation_consistency_losses, state, best_loss, best_epoch
 
 if __name__ == "__main__":
     print("=" * 80)
@@ -928,7 +981,7 @@ if __name__ == "__main__":
     print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
     
     training_losses, validation_losses, binary_losses, sparsity_losses, \
-    ego_agent_costs, validation_binary_losses, validation_sparsity_losses, \
+    ego_agent_costs, consistency_losses, validation_binary_losses, validation_sparsity_losses, \
     validation_ego_agent_costs, trained_state, best_loss, best_epoch = train_gnn(
         gnn_model,
         training_data,
@@ -937,6 +990,8 @@ if __name__ == "__main__":
         learning_rate=learning_rate,
         sigma1=sigma1,
         sigma2=sigma2,
+        sigma3=sigma3,
+        noise_std=noise_std,
         batch_size=batch_size,
         rng=rng,
         obs_input_type=config.gnn.obs_input_type,
