@@ -452,7 +452,7 @@ def parse_config_name(gnn_model_path: str) -> Dict[str, Any]:
     if os.path.isabs(gnn_model_path):
         gnn_model_path_tokens = gnn_model_path.split("/")
         log_dir_ind = gnn_model_path_tokens.index("log")
-        gnn_model_path = gnn_model_path_tokens[log_dir_ind + 1]
+        gnn_model_path = gnn_model_path_tokens[log_dir_ind + 2]
     else:
         gnn_model_path = gnn_model_path.split("/")[2] # first directory after log/
     config_tokens = gnn_model_path.split("_")
@@ -714,7 +714,7 @@ def train_gnn(
     # setup log directories
     agent_train_run_dir = f"{agent_type}_agent_train_runs"
     model_config_name = f"gnn_{obs_input_type}_MP_{num_message_passing_rounds}_edge-metric_{edge_metric}_top-k_{edge_metric_top_k}"
-    train_config_name = f"train_n_agents_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_epochs_{num_epochs}_loss_type_{loss_type}"
+    train_config_name = f"train_n_agents_{N_agents}_T_{T_total}_obs_{T_observation}_lr_{learning_rate}_bs_{batch_size}_sigma1_{sigma1}_sigma2_{sigma2}_sigma3_{sigma3}_noise_std_{noise_std}_epochs_{num_epochs}_loss_type_{loss_type}"
     
     # create train log setup
     model_log_dir = os.path.join("log", agent_train_run_dir, model_config_name)
@@ -942,7 +942,7 @@ def train_gnn(
     
     print(f"\nTraining completed! Best model found at epoch {best_epoch + 1} with loss: {best_loss:.4f}")
     
-    return training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, consistency_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, validation_consistency_losses, state, best_loss, best_epoch
+    return run_log_dir, training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, consistency_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, state, best_loss, best_epoch
 
 if __name__ == "__main__":
     print("=" * 80)
@@ -980,9 +980,7 @@ if __name__ == "__main__":
     
     print(f"GNN model created with observation type: {config.gnn.obs_input_type}")
     
-    training_losses, validation_losses, binary_losses, sparsity_losses, \
-    ego_agent_costs, consistency_losses, validation_binary_losses, validation_sparsity_losses, \
-    validation_ego_agent_costs, trained_state, best_loss, best_epoch = train_gnn(
+    run_log_dir, training_losses, validation_losses, binary_losses, sparsity_losses, similarity_losses, consistency_losses, validation_binary_losses, validation_sparsity_losses, validation_similarity_losses, state, best_loss, best_epoch = train_gnn(
         gnn_model,
         training_data,
         validation_data,
@@ -1000,10 +998,3 @@ if __name__ == "__main__":
         edge_metric=edge_metric,
         edge_metric_top_k=edge_metric_top_k
     )
-
-
-
-
-
-
-

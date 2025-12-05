@@ -38,7 +38,7 @@ optimization:
   
   drone:
     # iLQGames solver parameters
-    num_iters: 150            # Number of iterations for iLQGames solver  
+    num_iters: 100            # Number of iterations for iLQGames solver  
     step_size: 0.005          # Step size for gradient descent
     
     navigation_weight: 1.0    # Weight for navigation cost
@@ -117,26 +117,26 @@ psn:
 
 gnn:
   # Training parameters
-  learning_rate: 0.0003      # Learning rate for Adam optimizer
+  learning_rate: 0.001      # Learning rate for Adam optimizer
   batch_size: 32            # Batch size for training
-  num_epochs: 50            # Number of training epochs
+  num_epochs: 30            # Number of training epochs
   dropout_rate: 0.3
 
   # Loss function weights
-  sigma1: 1.0               # Weight for mask sparsity loss
-  sigma2: 1.0              # Weight for mask binary loss
-  sigma3: 0.5              # Weight for consistency loss
-  noise_std: 0.02
+  sigma1: 0.11               # Weight for mask sparsity loss
+  sigma2: 0.11              # Weight for mask binary loss
+  sigma3: 0.25              # Weight for consistency loss
+  noise_std: 0.5
 
   # graph edge creation parameters
-  edge_metric: "full" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
+  edge_metric: "barrier-function" # ["full", "nearest-neighbors", "jacobian", "barrier-function"]
   edge_metric_top_k: 5 # number of top values to consider
 
   # message passing rounds
   num_message_passing_rounds: 2
 
   # type of loss function to use (similarity vs ego agent cost)
-  loss_type: "ego_agent_cost" # ["similarity", "ego_agent_cost"]
+  loss_type: "similarity" # ["similarity", "ego_agent_cost"]
 
   # gru time delay discount factor
   gru_discount_factor: 0.8
@@ -301,7 +301,7 @@ debug:
 # ============================================================================
 device:
   # Device selection
-  preferred_device: "cpu"   # Preferred device ["gpu", "cpu", "auto"]
+  preferred_device: "gpu"   # Preferred device ["gpu", "cpu", "auto"]
   
   # JAX configuration
   jax_platform_name: null  # JAX platform name (null = auto-detect)

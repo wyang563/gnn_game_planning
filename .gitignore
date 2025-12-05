@@ -17,6 +17,7 @@ results
 eval_data_*
 point_agent_data*
 drone_agent_data*
+src/reference_packages/*
 
 # cache files
 *.egg-info

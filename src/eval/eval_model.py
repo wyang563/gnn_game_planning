@@ -283,7 +283,7 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # TOGGLE FOR EVALUATING ALL METHODS
-    eval_all_methods = True
+    eval_all_methods = True 
     
     # Extract parameters from configuration
     dt = config.game.dt
@@ -306,12 +306,32 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(opt_config.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251110_201039/psn_best_model.pkl"
+    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity/20251203_144120/psn_best_model.pkl"
     model_type = "gnn"  
     dataset_path = f"src/data/{agent_type}_agent_data/eval_data_upto_20p"
-    top_k_mask = 2
+    top_k_mask = 4
 
     TEST_MODE = False 
+
+    print("RUNNING EVALUATIONS")
+    print("=" * 60)
+    print(f"  agent_type: {agent_type}")
+    print(f"  model_path: {model_path}")
+    print(f"  model_type: {model_type}")
+    print(f"  dataset_path: {dataset_path}")
+    print(f"  top_k_mask: {top_k_mask}")
+    print(f"  eval_all_methods: {eval_all_methods}")
+    print(f"  test_mode: {TEST_MODE}")
+    print(f"  num_iters: {num_iters}")
+    print(f"  step_size: {step_size}")
+    print(f"  collision_weight: {collision_weight}")
+    print(f"  collision_scale: {collision_scale}")
+    print(f"  control_weight: {control_weight}")
+    print(f"  Q: {Q}")
+    print(f"  R: {R}")
+    print(f"  dt: {dt}")
+    print(f"  tsteps: {tsteps}")
+    print(f"  planning_horizon: {planning_horizon}")
 
     args = {
         "model_path": model_path,

@@ -22,7 +22,7 @@ if __name__ == "__main__":
     x_dim = opt_config.state_dim
     pos_dim = x_dim // 2
 
-    num_samples = 150 
+    num_samples = 50 
     output_dir = f"src/data/{agent_type}_agent_data/eval_data_upto_{n_agents}p"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -38,7 +38,15 @@ if __name__ == "__main__":
 
     for sample_id in tqdm(range(num_samples), total=num_samples, desc="Generating evaluation data"):
         n_agents = random.choice(selection_pool)
-        boundary_size = n_agents**(0.7)  * 1.75
+        
+        # vary boundary size dependent on agent
+        if agent_type == "drone":
+            boundary_size = n_agents**(0.5)  * 1.35
+        elif agent_type == "agent":
+            boundary_size = n_agents**(0.5)  * 1.75
+        else:
+            raise ValueError(f"Invalid agent type: {agent_type}")
+
         init_ps, init_goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
         out_file = os.path.join(output_dir, f"eval_data_sample_{sample_id:03d}.json")
         with open(out_file, "w") as f:

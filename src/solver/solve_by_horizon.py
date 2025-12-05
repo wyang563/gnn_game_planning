@@ -392,15 +392,14 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_epochs_50_loss_type_similarity/20251124_194516/psn_best_model.pkl"
+    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity/20251203_144008/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
     use_only_ego_masks = False 
 
     # model_type = "barrier_function"
-    # mask_mag = 5
+    # mask_mag = 2
     # model = None
     # model_state = None
-    
 
     # solve by horizon
     final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(
