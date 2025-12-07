@@ -45,7 +45,7 @@ from models.policies import barrier_function_top_k, jacobian_top_k, nearest_neig
 # ============================================================================
 # GLOBAL PARAMETERS
 # ============================================================================
-config = load_config(config_path="/home/alex/gnn_game_planning/src/config.yaml")
+config = load_config(config_path="src/config.yaml")
 
 # Game parameters
 N_agents = config.game.N_agents

@@ -18,6 +18,10 @@ eval_data_*
 point_agent_data*
 drone_agent_data*
 src/reference_packages/*
+venv/*
+*.pkl
+cache/*
+.vscode/*
 
 # cache files
 *.egg-info

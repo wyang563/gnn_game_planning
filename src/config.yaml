@@ -301,7 +301,7 @@ debug:
 # ============================================================================
 device:
   # Device selection
-  preferred_device: "gpu"   # Preferred device ["gpu", "cpu", "auto"]
+  preferred_device: "cpu"   # Preferred device ["gpu", "cpu", "auto"]
   
   # JAX configuration
   jax_platform_name: null  # JAX platform name (null = auto-detect)

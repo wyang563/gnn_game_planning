@@ -1,0 +1,10 @@
+Configuring drone URI:
+1 - run cfclient in terminal
+2 - go to connect button IN THE WINDOW to connect drone to computer
+3 - use usb cable to plug into the drone to the laptop
+4 - then use the connect button ON THE TOP TAB 
+5 - there should be a hex address corresponding with the drone that appears
+6 - copy paste so the address looks something like this (remove the "0x") hex prefix when using your address
+"radio://0/80/2M/E7E7E7E708"
+
+you must have cfclient running in a terminal window before you run your flight script to coordinate drones
