@@ -8,3 +8,8 @@ Configuring drone URI:
 "radio://0/80/2M/E7E7E7E708"
 
 you must have cfclient running in a terminal window before you run your flight script to coordinate drones
+
+
+https://www.bitcraze.io/documentation/repository/crazyflie-clients-python/master/userguides/userguide_client/
+^
+radio address config documentation

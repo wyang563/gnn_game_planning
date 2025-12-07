@@ -17,8 +17,7 @@ START_POINT: Point3D = (0.0, 0.0, 0.3)
 END_POINT: Point3D = (1.0, 0.0, 0.3)
 WAYPOINTS: List[Point3D] = [(0.0, 0.0, 0.3), (1.0, 0.0, 0.3), (1.0, 0.0, 1.3), (1.0, 0.0, 0.3)]
 DEFAULT_HEIGHT: float = 0.3
-SPEED: float = 0.2
-
+SPEED: float = 0.1
 
 def fly_list_points(
     uri: str,
