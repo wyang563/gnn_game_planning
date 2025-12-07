@@ -12,10 +12,10 @@ LOGGER = logging.getLogger(__name__)
 
 Point3D = Tuple[float, float, float]
 
-URI: str = "radio://0/80/2M/E7E7E7E708"
+URI: str = "radio://0/80/2M/E7E7E7E702"
 START_POINT: Point3D = (0.0, 0.0, 0.3)
 END_POINT: Point3D = (1.0, 0.0, 0.3)
-WAYPOINTS: List[Point3D] = [(0.0, 0.0, 0.3), (1.0, 0.0, 0.3), (1.0, 0.0, 1.3), (1.0, 0.0, 2.3)]
+WAYPOINTS: List[Point3D] = [(0.0, 0.0, 0.3), (1.0, 0.0, 0.3), (1.0, 0.0, 1.3), (1.0, 0.0, 0.3)]
 DEFAULT_HEIGHT: float = 0.3
 SPEED: float = 0.2
 
