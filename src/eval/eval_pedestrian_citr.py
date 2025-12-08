@@ -3,17 +3,20 @@ import jax.numpy as jnp
 import numpy as np
 import sys
 import os
+from pathlib import Path
 
 # Add src directory to path for imports
 src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-from utils.plot import plot_point_agent_trajs, plot_point_agent_gif
+from utils.plot import plot_point_agent_trajs, plot_point_agent_gif, plot_point_agent_mask_png
 from load_config import load_config, setup_jax_config, get_device_config
 from solver.point_agent import PointAgent
 from models.train_gnn import load_trained_gnn_models
 from solver.solve_by_horizon import solve_by_horizon
+from eval.compute_metrics import compute_metrics
+from utils.agent_selection_utils import agent_type_to_plot_functions
 
 def load_pedestrian_data(csv_path: str):
     """
@@ -100,10 +103,11 @@ if __name__ == "__main__":
     ref_trajs = jnp.array([jnp.linspace(init_ps[i][:2], goals[i], tsteps) for i in range(n_agents)])
     mask_horizon = config.game.T_observation
     u_dim = 2
-    mask_mag = None # default definition of mask magnitude
+    pos_dim = 2
+    mask_mag = 3 # default definition of mask magnitude
     
     model_type = "gnn"
-    model_path = "log/gnn_full_MP_3_edge-metric_full_top-k_5/train_n_agents_10_T_50_obs_10_lr_0.001_bs_32_sigma1_0.75_sigma2_0.75_epochs_50_loss_type_ego_agent_cost/20251105_222834/psn_best_model.pkl"
+    model_path = "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.05_sigma2_0.05_sigma3_0.02_noise_std_0.5_epochs_30_loss_type_similarity/20251206_232630/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
 
     final_x_trajs, control_trajs, simulation_masks = solve_by_horizon(
@@ -112,6 +116,7 @@ if __name__ == "__main__":
         ref_trajs=ref_trajs,
         num_iters=num_iters,
         u_dim=u_dim,
+        pos_dim=pos_dim,
         tsteps=tsteps,
         planning_horizon=planning_horizon,
         mask_horizon=mask_horizon,
@@ -121,8 +126,36 @@ if __name__ == "__main__":
         model_state=model_state,
         model_type=model_type,
         device=device,
-        mask_mag=mask_mag,
+        dt=dt,
+        top_k_mask=mask_mag,
+        use_only_ego_masks=True,
+        collision_weight=collision_weight,
+        collision_scale=collision_scale,
     )
 
-    plot_point_agent_trajs(final_x_trajs, goals, init_ps, save_path="src/eval/test.png")
-    plot_point_agent_gif(final_x_trajs, goals, init_ps, simulation_masks, 0, "src/eval/test.gif")
+    # compute metrics
+    metrics = compute_metrics(final_x_trajs, control_trajs, simulation_masks, data, ref_trajs, mask_horizon)
+
+    model_dir = Path(model_path).parent
+    ped_eval_results_dir = model_dir / f"pedestrian_citr_eval_results_{n_agents}"
+    os.makedirs(ped_eval_results_dir, exist_ok=True)
+
+    # write metrics to text file
+    metrics_file = ped_eval_results_dir / "metrics.txt"
+    with open(metrics_file, 'w') as f:
+        f.write("Evaluation Metrics\n")
+        f.write("=" * 50 + "\n\n")
+        for key, value in metrics.items():
+            f.write(f"{key}: {value}\n")
+
+
+    traj_png = ped_eval_results_dir / "pedestrian_citr_test_traj.png"
+    traj_gif = ped_eval_results_dir / "pedestrian_citr_test_traj.gif"
+    mask_gif = ped_eval_results_dir / "pedestrian_citr_test_mask.gif"
+    mask_png = ped_eval_results_dir / "pedestrian_citr_test_mask.png"
+    plot_functions = agent_type_to_plot_functions(agent_type)
+
+    plot_functions["plot_traj"](final_x_trajs, goals, init_ps, save_path=traj_png)
+    plot_functions["plot_traj_gif"](final_x_trajs, goals, init_ps, save_path=traj_gif)
+    plot_functions["plot_mask_gif"](final_x_trajs, goals, init_ps, simulation_masks, 0, mask_gif)
+    plot_functions["plot_mask_png"](final_x_trajs, goals, init_ps, simulation_masks, 0, mask_png)

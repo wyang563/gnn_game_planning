@@ -1087,5 +1087,378 @@ def plot_drone_agent_gif(trajectories, goals, init_positions, simulation_masks, 
     )
     print(f"✓ GIF created successfully!")
 
+def plot_drone_agent_mask_png(trajectories, goals, init_positions, player_mask, ego_agent_id, 
+                              save_path, figsize=(12, 10), xlim=None, ylim=None, zlim=None):
+    """
+    Create a single PNG plot showing drone agent trajectories with mask-based coloring.
+    Ego agent's trajectory is always blue. Other agents' trajectories are red when included
+    in the ego agent's player mask, gray otherwise.
+    
+    Args:
+        trajectories: Array of shape (n_agents, n_timesteps, state_dim) containing trajectories
+        goals: Array of shape (n_agents, 3) containing goal positions for each agent
+        init_positions: Array of shape (n_agents, 3) containing initial positions
+        player_mask: Array of shape (n_timesteps, n_agents) or (n_agents, n_timesteps) 
+                   boolean mask indicating which agents are in ego agent's player mask at each timestep
+        ego_agent_id: int, ID of the ego agent to highlight in blue
+        save_path: str, path to save the PNG file
+        figsize: tuple, figure size (default: (12, 10))
+        xlim: tuple, x-axis limits (default: None, auto-calculated from data)
+        ylim: tuple, y-axis limits (default: None, auto-calculated from data)
+        zlim: tuple, z-axis limits (default: None, auto-calculated from data)
+    """
+    # Convert to numpy arrays
+    trajectories = np.array(trajectories)
+    goals = np.array(goals)
+    init_positions = np.array(init_positions)
+    player_mask = np.array(player_mask)
+    
+    # Extract position data (first 3 columns if state includes velocity)
+    if trajectories.shape[-1] > 3:
+        positions = trajectories[:, :, :3]
+    else:
+        positions = trajectories
+    
+    n_agents, n_timesteps, _ = positions.shape
+    
+    # Handle mask shape - convert to (n_timesteps, n_agents)
+    if player_mask.shape[0] == n_agents and player_mask.shape[1] == n_timesteps:
+        player_mask = player_mask.T
+    
+    # Auto-calculate axis limits if not provided
+    if xlim is None or ylim is None or zlim is None:
+        # Gather all x, y, z coordinates from trajectories, goals, and initial positions
+        all_x = np.concatenate([
+            positions[:, :, 0].flatten(),
+            goals[:, 0],
+            init_positions[:, 0]
+        ])
+        all_y = np.concatenate([
+            positions[:, :, 1].flatten(),
+            goals[:, 1],
+            init_positions[:, 1]
+        ])
+        all_z = np.concatenate([
+            positions[:, :, 2].flatten(),
+            goals[:, 2],
+            init_positions[:, 2]
+        ])
+        
+        # Calculate min and max with padding (15% of the range)
+        x_min, x_max = all_x.min(), all_x.max()
+        y_min, y_max = all_y.min(), all_y.max()
+        z_min, z_max = all_z.min(), all_z.max()
+        
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        z_range = z_max - z_min
+        
+        x_padding = max(0.15 * x_range, 0.5)  # At least 0.5 units of padding
+        y_padding = max(0.15 * y_range, 0.5)
+        z_padding = max(0.15 * z_range, 0.5)
+        
+        if xlim is None:
+            xlim = (x_min - x_padding, x_max + x_padding)
+        if ylim is None:
+            ylim = (y_min - y_padding, y_max + y_padding)
+        if zlim is None:
+            zlim = (z_min - z_padding, z_max + z_padding)
+    
+    # Color scheme
+    ego_color = 'darkblue'
+    masked_color = 'red'
+    unmasked_color = 'gray'
+    
+    # Create figure
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection='3d')
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.set_zlim(zlim)
+    
+    ax.set_title('Agent Trajectories with Player Mask', fontsize=14, fontweight='bold')
+    ax.set_xlabel('X Position')
+    ax.set_ylabel('Y Position')
+    ax.set_zlabel('Z Position')
+    ax.grid(True, alpha=0.3)
+    
+    # Plot ego agent's full trajectory in blue
+    ego_traj = positions[ego_agent_id, :, :]
+    if len(ego_traj) > 1:
+        ax.plot(ego_traj[:, 0], ego_traj[:, 1], ego_traj[:, 2], '-', 
+               color=ego_color, alpha=0.9, linewidth=3, 
+               label=f'Ego Agent {ego_agent_id}')
+    
+    # Plot other agents' trajectories with mask-based coloring
+    for i in range(n_agents):
+        if i == ego_agent_id:
+            continue  # Skip ego agent (already plotted)
+        
+        agent_traj = positions[i, :, :]
+        if len(agent_traj) <= 1:
+            continue
+        
+        # Get mask for this agent across all timesteps
+        agent_mask = player_mask[:, i]  # Shape: (n_timesteps,)
+        
+        # Segment trajectory based on mask changes
+        # Convert boolean to int and find where it changes
+        mask_int = agent_mask.astype(int)
+        diffs = np.diff(mask_int)
+        # Find indices where mask changes (add 1 because diff gives index of second element)
+        change_indices = np.where(diffs != 0)[0] + 1
+        # Create segment boundaries: [0, change1, change2, ..., n_timesteps]
+        segment_boundaries = np.concatenate([[0], change_indices, [n_timesteps]])
+        
+        # Plot each segment
+        for seg_idx in range(len(segment_boundaries) - 1):
+            start_idx = segment_boundaries[seg_idx]
+            end_idx = segment_boundaries[seg_idx + 1]
+            
+            if start_idx >= end_idx:
+                continue
+            
+            # Determine color based on mask value at start of segment
+            is_masked = agent_mask[start_idx]
+            
+            # Extract segment
+            seg_traj = agent_traj[start_idx:end_idx, :]
+            
+            if len(seg_traj) > 1:
+                color = masked_color if is_masked else unmasked_color
+                alpha = 0.8 if is_masked else 0.4
+                linewidth = 2.5 if is_masked else 1.5
+                linestyle = '-' if is_masked else '--'
+                
+                ax.plot(seg_traj[:, 0], seg_traj[:, 1], seg_traj[:, 2], 
+                       linestyle, color=color, alpha=alpha, linewidth=linewidth,
+                       label=f'Agent {i}' if seg_idx == 0 and is_masked else '')
+    
+    # Plot final positions
+    for i in range(n_agents):
+        final_pos = positions[i, -1, :]
+        is_masked = player_mask[-1, i] if i < player_mask.shape[1] else False
+        
+        if i == ego_agent_id:
+            # Ego agent: blue circle
+            ax.scatter(final_pos[0], final_pos[1], final_pos[2],
+                      color=ego_color, s=100, marker='o', alpha=0.8,
+                      edgecolors='black', linewidth=2)
+        else:
+            # Other agents: colored by mask status
+            color = masked_color if is_masked else unmasked_color
+            ax.scatter(final_pos[0], final_pos[1], final_pos[2],
+                      color=color, s=80, marker='o', alpha=0.8,
+                      edgecolors='black', linewidth=1.5)
+            # Add text label with mask indicator
+            label_text = f'{i}*' if is_masked else f'{i}'
+            ax.text(final_pos[0] + 0.1, final_pos[1] + 0.1, final_pos[2] + 0.1, 
+                   label_text, fontsize=10, ha='left', va='bottom', 
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.8))
+    
+    # Plot goals as stars
+    for i in range(n_agents):
+        goal_pos = goals[i]
+        
+        if i == ego_agent_id:  # Ego agent goal
+            ax.scatter(goal_pos[0], goal_pos[1], goal_pos[2],
+                      color=ego_color, s=200, marker='*', 
+                      edgecolors='black', linewidth=2, alpha=0.8)
+        else:  # Other agent goals
+            # Check if agent is ever in mask to determine goal color
+            ever_masked = np.any(player_mask[:, i]) if i < player_mask.shape[1] else False
+            goal_color = masked_color if ever_masked else unmasked_color
+            ax.scatter(goal_pos[0], goal_pos[1], goal_pos[2],
+                      color=goal_color, s=150, marker='*', 
+                      edgecolors='black', linewidth=1.5, alpha=0.6)
+    
+    plt.tight_layout()
+    
+    # Save as PNG
+    print(f"Saving PNG to: {save_path}")
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"✓ PNG created successfully!")
+
+def plot_point_agent_mask_png(trajectories, goals, init_positions, player_mask, ego_agent_id, 
+                              save_path, figsize=(12, 10), xlim=None, ylim=None):
+    """
+    Create a single PNG plot showing point agent trajectories with mask-based coloring in 2D.
+    Ego agent's trajectory is always blue. Other agents' trajectories are red when included
+    in the ego agent's player mask, gray otherwise.
+    
+    Args:
+        trajectories: Array of shape (n_agents, n_timesteps, state_dim) containing trajectories
+        goals: Array of shape (n_agents, 2) containing goal positions for each agent
+        init_positions: Array of shape (n_agents, 2) containing initial positions
+        player_mask: Array of shape (n_timesteps, n_agents) or (n_agents, n_timesteps) 
+                   boolean mask indicating which agents are in ego agent's player mask at each timestep
+        ego_agent_id: int, ID of the ego agent to highlight in blue
+        save_path: str, path to save the PNG file
+        figsize: tuple, figure size (default: (12, 10))
+        xlim: tuple, x-axis limits (default: None, auto-calculated from data)
+        ylim: tuple, y-axis limits (default: None, auto-calculated from data)
+    """
+    # Convert to numpy arrays
+    trajectories = np.array(trajectories)
+    goals = np.array(goals)
+    init_positions = np.array(init_positions)
+    player_mask = np.array(player_mask)
+    
+    # Extract position data (first 2 columns if state includes velocity)
+    if trajectories.shape[-1] > 2:
+        positions = trajectories[:, :, :2]
+    else:
+        positions = trajectories
+    
+    n_agents, n_timesteps, _ = positions.shape
+    
+    # Handle mask shape - convert to (n_timesteps, n_agents)
+    if player_mask.shape[0] == n_agents and player_mask.shape[1] == n_timesteps:
+        player_mask = player_mask.T
+    
+    # Auto-calculate axis limits if not provided
+    if xlim is None or ylim is None:
+        # Gather all x, y coordinates from trajectories, goals, and initial positions
+        all_x = np.concatenate([
+            positions[:, :, 0].flatten(),
+            goals[:, 0],
+            init_positions[:, 0]
+        ])
+        all_y = np.concatenate([
+            positions[:, :, 1].flatten(),
+            goals[:, 1],
+            init_positions[:, 1]
+        ])
+        
+        # Calculate min and max with padding (15% of the range)
+        x_min, x_max = all_x.min(), all_x.max()
+        y_min, y_max = all_y.min(), all_y.max()
+        
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        
+        x_padding = max(0.15 * x_range, 0.5)  # At least 0.5 units of padding
+        y_padding = max(0.15 * y_range, 0.5)
+        
+        if xlim is None:
+            xlim = (x_min - x_padding, x_max + x_padding)
+        if ylim is None:
+            ylim = (y_min - y_padding, y_max + y_padding)
+    
+    # Color scheme
+    ego_color = 'darkblue'
+    masked_color = 'red'
+    unmasked_color = 'gray'
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    ax.set_aspect('equal', adjustable='box')
+    
+    ax.set_title('Agent Trajectories with Player Mask', fontsize=14, fontweight='bold')
+    ax.set_xlabel('X Position', fontsize=10)
+    ax.set_ylabel('Y Position', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    
+    # Plot ego agent's full trajectory in blue
+    ego_traj = positions[ego_agent_id, :, :]
+    if len(ego_traj) > 1:
+        ax.plot(ego_traj[:, 0], ego_traj[:, 1], '-', 
+               color=ego_color, alpha=0.9, linewidth=3, 
+               label=f'Ego Agent {ego_agent_id}')
+    
+    # Plot other agents' trajectories with mask-based coloring
+    for i in range(n_agents):
+        if i == ego_agent_id:
+            continue  # Skip ego agent (already plotted)
+        
+        agent_traj = positions[i, :, :]
+        if len(agent_traj) <= 1:
+            continue
+        
+        # Get mask for this agent across all timesteps
+        agent_mask = player_mask[:, i]  # Shape: (n_timesteps,)
+        
+        # Segment trajectory based on mask changes
+        # Convert boolean to int and find where it changes
+        mask_int = agent_mask.astype(int)
+        diffs = np.diff(mask_int)
+        # Find indices where mask changes (add 1 because diff gives index of second element)
+        change_indices = np.where(diffs != 0)[0] + 1
+        # Create segment boundaries: [0, change1, change2, ..., n_timesteps]
+        segment_boundaries = np.concatenate([[0], change_indices, [n_timesteps]])
+        
+        # Plot each segment
+        for seg_idx in range(len(segment_boundaries) - 1):
+            start_idx = segment_boundaries[seg_idx]
+            end_idx = segment_boundaries[seg_idx + 1]
+            
+            if start_idx >= end_idx:
+                continue
+            
+            # Determine color based on mask value at start of segment
+            is_masked = agent_mask[start_idx]
+            
+            # Extract segment
+            seg_traj = agent_traj[start_idx:end_idx, :]
+            
+            if len(seg_traj) > 1:
+                color = masked_color if is_masked else unmasked_color
+                alpha = 0.8 if is_masked else 0.4
+                linewidth = 2.5 if is_masked else 1.5
+                linestyle = '-' if is_masked else '--'
+                
+                ax.plot(seg_traj[:, 0], seg_traj[:, 1], 
+                       linestyle, color=color, alpha=alpha, linewidth=linewidth,
+                       label=f'Agent {i}' if seg_idx == 0 and is_masked else '')
+    
+    # Plot final positions
+    for i in range(n_agents):
+        final_pos = positions[i, -1, :]
+        is_masked = player_mask[-1, i] if i < player_mask.shape[1] else False
+        
+        if i == ego_agent_id:
+            # Ego agent: blue circle
+            ax.scatter(final_pos[0], final_pos[1],
+                      color=ego_color, s=100, marker='o', alpha=0.8,
+                      edgecolors='black', linewidth=2)
+        else:
+            # Other agents: colored by mask status
+            color = masked_color if is_masked else unmasked_color
+            ax.scatter(final_pos[0], final_pos[1],
+                      color=color, s=80, marker='o', alpha=0.8,
+                      edgecolors='black', linewidth=1.5)
+            # Add text label with mask indicator
+            label_text = f'{i}*' if is_masked else f'{i}'
+            ax.text(final_pos[0] + 0.1, final_pos[1] + 0.1, 
+                   label_text, fontsize=10, ha='left', va='bottom', 
+                   bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.8))
+    
+    # Plot goals as stars
+    for i in range(n_agents):
+        goal_pos = goals[i]
+        
+        if i == ego_agent_id:  # Ego agent goal
+            ax.scatter(goal_pos[0], goal_pos[1],
+                      color=ego_color, s=200, marker='*', 
+                      edgecolors='black', linewidth=2, alpha=0.8)
+        else:  # Other agent goals
+            # Check if agent is ever in mask to determine goal color
+            ever_masked = np.any(player_mask[:, i]) if i < player_mask.shape[1] else False
+            goal_color = masked_color if ever_masked else unmasked_color
+            ax.scatter(goal_pos[0], goal_pos[1],
+                      color=goal_color, s=150, marker='*', 
+                      edgecolors='black', linewidth=1.5, alpha=0.6)
+    
+    plt.tight_layout()
+    
+    # Save as PNG
+    print(f"Saving PNG to: {save_path}")
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    print(f"✓ PNG created successfully!")
+
 def plot_past_and_predicted_drone_agent_trajectories():
     pass

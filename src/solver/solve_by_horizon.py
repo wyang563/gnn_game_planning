@@ -345,11 +345,12 @@ if __name__ == "__main__":
 
     # CUSTOM CONFIGS
     tsteps = 100
-    n_agents = 25 
+    n_agents = 50 
     num_iters = 150 
 
     print("Optimization parameters:")
     print(f"  agent_type: {agent_type}")
+    print(f"  pos_dim: {pos_dim}")
     print(f"  n_agents: {n_agents}")
     print(f"  tsteps: {tsteps}")
     print(f"  num_iters: {num_iters}")
@@ -359,7 +360,10 @@ if __name__ == "__main__":
     print(f"  control_weight: {control_weight}")
 
     # genera random inits
-    boundary_size = 1.35 * n_agents**0.5
+    if pos_dim == 2:
+        boundary_size = 1.75 * n_agents**0.7
+    if pos_dim == 3:
+        boundary_size = 1.35 * n_agents**0.5
     match init_type:
         case "random":
             init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
@@ -392,11 +396,11 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity/20251203_144008/psn_best_model.pkl"
+    model_path = "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_1.0_sigma2_1.0_sigma3_0.1_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251207_125802/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
     use_only_ego_masks = False 
 
-    # model_type = "barrier_function"
+    # model_type = "all"
     # mask_mag = 2
     # model = None
     # model_state = None
@@ -434,6 +438,7 @@ if __name__ == "__main__":
     plot_save_path = os.path.join(out_dir, "test.png")
     traj_gif_save_path = os.path.join(out_dir, "traj_test.gif")
     mask_gif_save_path = os.path.join(out_dir, "mask_test.gif")
+    mask_png_save_path = os.path.join(out_dir, "mask_test.png")
 
     plot_functions = agent_type_to_plot_functions(agent_type)
 
@@ -443,4 +448,6 @@ if __name__ == "__main__":
     plot_functions["plot_traj_gif"](final_x_trajs, goals, init_ps, save_path=traj_gif_save_path)
     print(f"Creating Mask GIF")
     plot_functions["plot_mask_gif"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_gif_save_path)
+    print(f"Creating Mask PNG")
+    plot_functions["plot_mask_png"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_png_save_path)
 
