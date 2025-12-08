@@ -93,6 +93,9 @@ def eval_model(
         n_agents = sample["n_agents"]
         init_ps_raw = jnp.array(sample["init_ps"])
         goals = jnp.array(sample["init_goals"])
+
+        # modify tsteps based on n_agents to allow for more flexible route planning when there are more agents and the arena is bigger
+        tsteps = max(50, n_agents * 4) 
         
         # add velocity to initial positions
         init_ps = jnp.array([jnp.array(init_ps_raw[i][:pos_dim].tolist() + [0.0] * pos_dim) for i in range(n_agents)])
@@ -306,57 +309,78 @@ if __name__ == "__main__":
     R = jnp.diag(jnp.array(opt_config.R))
 
     # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity/20251203_144120/psn_best_model.pkl"
+    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.7_sigma2_0.7_sigma3_1.5_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251205_094622/psn_best_model.pkl"
     model_type = "gnn"  
     dataset_path = f"src/data/{agent_type}_agent_data/eval_data_upto_20p"
-    top_k_mask = 4
+    top_k_mask = 1
 
     TEST_MODE = False 
 
-    print("RUNNING EVALUATIONS")
-    print("=" * 60)
-    print(f"  agent_type: {agent_type}")
-    print(f"  model_path: {model_path}")
-    print(f"  model_type: {model_type}")
-    print(f"  dataset_path: {dataset_path}")
-    print(f"  top_k_mask: {top_k_mask}")
-    print(f"  eval_all_methods: {eval_all_methods}")
-    print(f"  test_mode: {TEST_MODE}")
-    print(f"  num_iters: {num_iters}")
-    print(f"  step_size: {step_size}")
-    print(f"  collision_weight: {collision_weight}")
-    print(f"  collision_scale: {collision_scale}")
-    print(f"  control_weight: {control_weight}")
-    print(f"  Q: {Q}")
-    print(f"  R: {R}")
-    print(f"  dt: {dt}")
-    print(f"  tsteps: {tsteps}")
-    print(f"  planning_horizon: {planning_horizon}")
+    # multiple model paths
+    # model_paths = [
+    #     "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.01_noise_std_0.5_epochs_30_loss_type_similarity/20251207_125719/psn_best_model.pkl",
+    #     "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_1.0_sigma2_1.0_sigma3_0.1_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251207_125802/psn_best_model.pkl",
+    #     "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_sigma3_0.5_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251206_232715/psn_best_model.pkl",
+    #     "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.08_sigma2_0.08_sigma3_0.04_noise_std_0.5_epochs_30_loss_type_similarity/20251206_173412/psn_best_model.pkl",
+    #     "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.05_sigma2_0.05_sigma3_0.02_noise_std_0.5_epochs_30_loss_type_similarity/20251206_232630/psn_best_model.pkl"
+    # ]
 
-    args = {
-        "model_path": model_path,
-        "model_type": model_type,
-        "dataset_path": dataset_path,
-        "num_iters": num_iters,
-        "step_size": step_size,
-        "collision_weight": collision_weight,
-        "collision_scale": collision_scale,
-        "control_weight": control_weight,
-        "Q": Q,
-        "R": R,
-        "dt": dt,
-        "tsteps": tsteps,
-        "planning_horizon": planning_horizon,
-        "mask_horizon": mask_horizon,
-        "mask_threshold": mask_threshold,
-        "device": device,
-        "u_dim": opt_config.control_dim,
-        "x_dim": opt_config.state_dim,
-        "dt": dt, 
-        "top_k_mask": top_k_mask,
-        "pos_dim": opt_config.state_dim // 2,
-        "eval_all_methods": eval_all_methods,
-        "test_mode": TEST_MODE,
-    }
+    model_paths = [
+        "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.7_sigma2_0.7_sigma3_1.5_noise_std_0.1_epochs_30_loss_type_ego_agent_cost/20251127_091515/psn_best_model.pkl",
+        "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.7_sigma2_0.7_sigma3_1.5_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251205_094652/psn_best_model.pkl",
+        "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.1_epochs_30_loss_type_similarity/20251127_091623/psn_best_model.pkl",
+        "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.7_sigma2_0.7_sigma3_1.5_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251205_094622/psn_best_model.pkl",
+        "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity/20251203_144120/psn_best_model.pkl"
+    ]
 
-    eval_model(**args)
+    for i, model_path in enumerate(model_paths):
+        top_k_mask = i + 1
+
+        print("RUNNING EVALUATIONS")
+        print("=" * 60)
+        print(f"  agent_type: {agent_type}")
+        print(f"  model_path: {model_path}")
+        print(f"  model_type: {model_type}")
+        print(f"  dataset_path: {dataset_path}")
+        print(f"  top_k_mask: {top_k_mask}")
+        print(f"  eval_all_methods: {eval_all_methods}")
+        print(f"  test_mode: {TEST_MODE}")
+        print(f"  num_iters: {num_iters}")
+        print(f"  step_size: {step_size}")
+        print(f"  collision_weight: {collision_weight}")
+        print(f"  collision_scale: {collision_scale}")
+        print(f"  control_weight: {control_weight}")
+        print(f"  Q: {Q}")
+        print(f"  R: {R}")
+        print(f"  dt: {dt}")
+        print(f"  tsteps: {tsteps}")
+        print(f"  planning_horizon: {planning_horizon}")
+        print(f"  top_k_mask: {top_k_mask}")
+
+        args = {
+            "model_path": model_path,
+            "model_type": model_type,
+            "dataset_path": dataset_path,
+            "num_iters": num_iters,
+            "step_size": step_size,
+            "collision_weight": collision_weight,
+            "collision_scale": collision_scale,
+            "control_weight": control_weight,
+            "Q": Q,
+            "R": R,
+            "dt": dt,
+            "tsteps": tsteps,
+            "planning_horizon": planning_horizon,
+            "mask_horizon": mask_horizon,
+            "mask_threshold": mask_threshold,
+            "device": device,
+            "u_dim": opt_config.control_dim,
+            "x_dim": opt_config.state_dim,
+            "dt": dt, 
+            "top_k_mask": top_k_mask,
+            "pos_dim": opt_config.state_dim // 2,
+            "eval_all_methods": eval_all_methods,
+            "test_mode": TEST_MODE,
+        }
+
+        eval_model(**args)

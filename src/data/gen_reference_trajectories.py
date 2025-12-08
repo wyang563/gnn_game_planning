@@ -20,7 +20,7 @@ def generate_reference_trajectories(**kwargs):
     # extract inputs
     n_agents = kwargs["n_agents"]
     agent_type = kwargs["agent_type"]
-    tsteps = kwargs["tsteps"]
+    min_tsteps = kwargs["tsteps"]
     dt = kwargs["dt"]
     num_iters = kwargs["num_iters"]
     step_size = kwargs["step_size"]
@@ -64,11 +64,17 @@ def generate_reference_trajectories(**kwargs):
                     selection_pool.extend([i] * 3)
             n_agents = random.choice(selection_pool)
             # recalibrate boundary size based on number of agents
-            boundary_size = n_agents**(0.5)  * 1.35
+            if pos_dim == 2:
+                boundary_size = n_agents**(0.7)  * 1.75
+            elif pos_dim == 3:
+                boundary_size = n_agents**(0.5)  * 1.35
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, agent_class, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
             create_loss_functions(agents, "no_mask")
         else:
             raise ValueError(f"Invalid generation type: {gen_type}")
+
+        # modify tsteps based on number of agents
+        tsteps = max(min_tsteps, n_agents * 4)
 
         # solve iLQGames
         state_trajs, control_trajs, _ = solve_ilqgames_parallel_no_mask(agents, initial_states, reference_trajectories, num_iters, u_dim, tsteps, step_size, device)

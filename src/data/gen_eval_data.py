@@ -42,8 +42,8 @@ if __name__ == "__main__":
         # vary boundary size dependent on agent
         if agent_type == "drone":
             boundary_size = n_agents**(0.5)  * 1.35
-        elif agent_type == "agent":
-            boundary_size = n_agents**(0.5)  * 1.75
+        elif agent_type == "point":
+            boundary_size = n_agents**(0.7)  * 1.75
         else:
             raise ValueError(f"Invalid agent type: {agent_type}")
 

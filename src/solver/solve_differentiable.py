@@ -48,6 +48,9 @@ def solve_masked_game_differentiable_parallel(
     """
     n_agents = len(agents)
 
+    # modify T_total based on number of agents
+    T_total = max(T_total, n_agents * 4)
+
     # create batched loss functions
     jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss = create_batched_loss_functions_mask(agents, device)
 
@@ -128,7 +131,7 @@ def solve_masked_game_differentiable(agents: list, initial_states: list, target_
         Tuple of (state_trajectories, control_trajectories)
     """
     n_selected = len(agents)
-    
+
     # Convert lists to JAX arrays for better performance and differentiability
     initial_states_array = jnp.stack([jnp.array(s) for s in initial_states])  # (n_selected, state_dim)
     
