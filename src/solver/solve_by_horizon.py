@@ -344,9 +344,9 @@ if __name__ == "__main__":
     u_dim = opt_config.control_dim
 
     # CUSTOM CONFIGS
-    tsteps = 100
-    n_agents = 50 
-    num_iters = 150 
+    tsteps = 50 
+    n_agents = 10 
+    num_iters = 50 
 
     print("Optimization parameters:")
     print(f"  agent_type: {agent_type}")
@@ -396,7 +396,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_1.0_sigma2_1.0_sigma3_0.1_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251207_125802/psn_best_model.pkl"
+    model_path = "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.05_sigma2_0.05_sigma3_0.02_noise_std_0.5_epochs_30_loss_type_similarity/20251206_232630/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
     use_only_ego_masks = False 
 
@@ -433,12 +433,13 @@ if __name__ == "__main__":
     print(f"Minimum distance: {min_distance}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = f"log/solve_by_horizon_run/{timestamp}"
+    out_dir = f"plots/solve_by_horizon_run/{timestamp}"
     os.makedirs(out_dir, exist_ok=True)
-    plot_save_path = os.path.join(out_dir, "test.png")
+    plot_save_path = os.path.join(out_dir, "test.pdf")
     traj_gif_save_path = os.path.join(out_dir, "traj_test.gif")
     mask_gif_save_path = os.path.join(out_dir, "mask_test.gif")
-    mask_png_save_path = os.path.join(out_dir, "mask_test.png")
+    mask_png_save_path = os.path.join(out_dir, "mask_test.pdf")
+    mask_png_timesteps_save_path = os.path.join(out_dir, "mask_test_timesteps.pdf")
 
     plot_functions = agent_type_to_plot_functions(agent_type)
 
@@ -450,4 +451,6 @@ if __name__ == "__main__":
     plot_functions["plot_mask_gif"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_gif_save_path)
     print(f"Creating Mask PNG")
     plot_functions["plot_mask_png"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_png_save_path)
+    print(f"Creating Mask Timesteps PNG")
+    plot_functions["plot_mask_timesteps_png"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_png_timesteps_save_path)
 

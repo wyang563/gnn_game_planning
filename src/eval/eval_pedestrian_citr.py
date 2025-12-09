@@ -149,13 +149,15 @@ if __name__ == "__main__":
             f.write(f"{key}: {value}\n")
 
 
-    traj_png = ped_eval_results_dir / "pedestrian_citr_test_traj.png"
+    traj_png = ped_eval_results_dir / "pedestrian_citr_test_traj.pdf"
     traj_gif = ped_eval_results_dir / "pedestrian_citr_test_traj.gif"
     mask_gif = ped_eval_results_dir / "pedestrian_citr_test_mask.gif"
-    mask_png = ped_eval_results_dir / "pedestrian_citr_test_mask.png"
+    mask_png = ped_eval_results_dir / "pedestrian_citr_test_mask.pdf"
+    mask_png_timesteps = ped_eval_results_dir / "pedestrian_citr_test_mask_timesteps.pdf"
     plot_functions = agent_type_to_plot_functions(agent_type)
 
     plot_functions["plot_traj"](final_x_trajs, goals, init_ps, save_path=traj_png)
     plot_functions["plot_traj_gif"](final_x_trajs, goals, init_ps, save_path=traj_gif)
     plot_functions["plot_mask_gif"](final_x_trajs, goals, init_ps, simulation_masks, 0, mask_gif)
     plot_functions["plot_mask_png"](final_x_trajs, goals, init_ps, simulation_masks, 0, mask_png)
+    plot_functions["plot_mask_timesteps_png"](final_x_trajs, goals, init_ps, simulation_masks, 0, mask_png_timesteps, figsize=(24, 72))
