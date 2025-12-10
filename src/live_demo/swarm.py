@@ -1,14 +1,9 @@
 """
-Crazyflie Swarm Control with Step-by-Step Execution
+Crazyflie Swarm Control with Flexible Step Triggering
 
-This script controls one or more Crazyflie drones with manual step progression.
+This script controls one or more Crazyflie drones with configurable step progression.
 Commands are organized into steps that execute in parallel across drones.
-After each Goto step, the system pauses and waits for user input.
-
-SETUP:
-1. Set ACTIVE_DRONES to the number of drones you want to use (1 or 2)
-2. Set USE_TWO_DRONES = True/False in the main section to select sequence
-3. Make sure ACTIVE_DRONES matches your sequence (1 for single, 2 for dual)
+After each Goto step, the system waits for a trigger signal before proceeding.
 
 SEQUENCE FORMAT:
 - List of steps: [step0, step1, step2, ...]
@@ -54,6 +49,63 @@ def arm(scf):
     scf.cf.platform.send_arming_request(True)
     time.sleep(1.0)
 
+# TRIGGER FUNCTIONS
+def create_timer_trigger(delay_seconds):
+    """
+    Create a timer-based trigger that waits a fixed duration between steps.
+    
+    Args:
+        delay_seconds: How long to wait before proceeding to next step
+    
+    Returns:
+        A wait function compatible with control_thread
+    """
+    def wait_function(step_idx, goto_drones):
+        print(f'   Waiting {delay_seconds} seconds before next step...')
+        time.sleep(delay_seconds)
+    return wait_function
+
+
+def create_event_trigger():
+    """
+    Create an event-based trigger that can be signaled externally.
+    
+    Example usage:
+        wait_trigger, trigger_event = create_event_trigger()
+        
+        # In main thread: start drone control
+        threading.Thread(target=control_thread, args=(wait_trigger,)).start()
+        
+        # In another thread/process: trigger next step
+        trigger_event.set()  # Drones will proceed to next waypoint
+    
+    Returns:
+        (wait_function, event): 
+            - wait_function: Compatible with control_thread
+            - event: threading.Event() that external code can set() to trigger next step
+    """
+    event = threading.Event()
+    
+    def wait_function(step_idx, goto_drones):
+        print(f'   Waiting for external signal to proceed...')
+        event.wait()  # Block until event.set() is called
+        event.clear()  # Reset for next step
+    
+    return wait_function, event
+
+
+def create_manual_trigger():
+    """
+    Create a manual input trigger (default behavior).
+    
+    Returns:
+        A wait function compatible with control_thread
+    """
+    def wait_function(step_idx, goto_drones):
+        input('\n   All drones in position. Press Enter to proceed to next step...')
+    return wait_function
+
+
 def crazyflie_control(scf):
     cf = scf.cf
     control = controlQueues[uris.index(cf.link_uri)]
@@ -83,9 +135,24 @@ def crazyflie_control(scf):
         else:
             print('Warning! unknown command {} for uri {}'.format(command, cf.uri))
 
-def control_thread():
+def control_thread(wait_for_next_step=None):
+    """
+    Execute the sequence of commands step by step.
+    
+    Args:
+        wait_for_next_step: Optional callable that determines when to proceed to next step.
+                           Signature: wait_for_next_step(step_idx, goto_drones) -> None
+                           - step_idx: Current step number
+                           - goto_drones: List of (drone_id, goto_command) tuples for this step
+                           Should block until ready to proceed to next step.
+                           If None, uses default input() prompt.
+    """
     stop = False
     step_idx = 0
+    
+    # Default wait function: manual user input
+    if wait_for_next_step is None:
+        wait_for_next_step = create_manual_trigger()
 
     while not stop:
         if step_idx >= len(sequence):
@@ -121,15 +188,13 @@ def control_thread():
         if max_duration > 0:
             time.sleep(max_duration + 0.5)
         
-        # If there were Goto commands, maintain hover and wait for user input
+        # If there were Goto commands, wait for signal to proceed
         if has_goto:
-            # Send long-duration hover commands to maintain position
             for cf_id, goto_cmd in goto_drones:
-                controlQueues[cf_id].put(Goto(goto_cmd.x, goto_cmd.y, goto_cmd.z, HOVER_TIME))
                 print(f'   Drone {cf_id} hovering at ({goto_cmd.x}, {goto_cmd.y}, {goto_cmd.z})')
             
-            time.sleep(0.5)  # Brief delay for hover commands to take effect
-            input('\n   All drones in position. Press Enter to proceed to next step...')
+            # Call the wait function (blocks until signal to proceed)
+            wait_for_next_step(step_idx, goto_drones)
         else:
             # For non-Goto steps (Arm, Takeoff, Land), just report completion
             if step_commands and type(step_commands[0][1]) is Takeoff:
@@ -144,6 +209,7 @@ def control_thread():
     for ctrl in controlQueues:
         ctrl.put(Quit())
 
+
 if __name__ == "__main__":
     sequence = [
         [(0, Arm()), (1, Arm())],
@@ -152,15 +218,39 @@ if __name__ == "__main__":
         [(0, Goto(0.5, 0.5, 0.5, STEP_TIME)), (1, Goto(-0.5, -0.5, 1.0, STEP_TIME))],
         [(0, Goto(-0.5, -0.5, 0.5, STEP_TIME)), (1, Goto(0.5, 0.5, 1.0, STEP_TIME))],
         [(0, Goto(-0.5, -0.5, 1.5, STEP_TIME)), (1, Goto(0.5, 0.5, 1.5, STEP_TIME))],
+        [(0, Goto(-0.5, -0.5, 0.25, STEP_TIME)), (1, Goto(0.5, 0.5, 0.25, STEP_TIME))],
         [(0, Land(2)), (1, Land(2))]
     ]
+    # sequence = [
+    #     [(0, Arm())],
+    #     [(0, Takeoff(0.25, STEP_TIME))],
+    #     [(0, Goto(-0.5, -0.5, 0.25, STEP_TIME))],
+    #     [(0, Goto(0.5, 0.5, 0.25, STEP_TIME))],
+    #     [(0, Goto(-0.5, -0.5, 0.25, STEP_TIME))],
+    #     [(0, Goto(-0.5, -0.5, 1.5, STEP_TIME))],
+    #     [(0, Land(2))]
+    # ]
 
     controlQueues = [Queue() for _ in range(len(uris))]
+    
+    # ===== CONFIGURE TRIGGER MODE =====
+    # Choose one of the following trigger modes:
+    
+    # Option 1: Manual input (default) - press Enter to proceed
+    # wait_trigger = create_manual_trigger()
+    
+    # Option 2: Timer-based - automatically proceed after N seconds
+    wait_trigger = create_timer_trigger(delay_seconds=3)
+    
+    # Option 3: Event-based - external code can trigger via event.set()
+    # wait_trigger, trigger_event = create_event_trigger()
+    # # Then in another thread/process: trigger_event.set() to proceed
     
     print(f'Configuration:')
     print(f'  Number of drones: {len(uris)}')
     print(f'  URIs: {uris}')
-    print(f'  Sequence length: {len(sequence)} commands')
+    print(f'  Sequence length: {len(sequence)} steps')
+    print(f'  Trigger mode: {wait_trigger.__name__ if hasattr(wait_trigger, "__name__") else "custom"}')
     print(f'\nAttempting to connect to drones...')
 
     cflib.crtp.init_drivers()
@@ -171,7 +261,7 @@ if __name__ == "__main__":
 
         print('\nStarting sequence!')
 
-        threading.Thread(target=control_thread).start()
+        threading.Thread(target=control_thread, args=(wait_trigger,)).start()
 
         swarm.parallel_safe(crazyflie_control)
 
