@@ -233,18 +233,8 @@ if __name__ == "__main__":
 
     controlQueues = [Queue() for _ in range(len(uris))]
     
-    # ===== CONFIGURE TRIGGER MODE =====
-    # Choose one of the following trigger modes:
-    
-    # Option 1: Manual input (default) - press Enter to proceed
-    # wait_trigger = create_manual_trigger()
-    
-    # Option 2: Timer-based - automatically proceed after N seconds
+    # CONFIGURE TRIGGER FUNCTION HERE
     wait_trigger = create_timer_trigger(delay_seconds=3)
-    
-    # Option 3: Event-based - external code can trigger via event.set()
-    # wait_trigger, trigger_event = create_event_trigger()
-    # # Then in another thread/process: trigger_event.set() to proceed
     
     print(f'Configuration:')
     print(f'  Number of drones: {len(uris)}')
