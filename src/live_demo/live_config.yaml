@@ -1,4 +1,4 @@
-drone_uris: ['02']
+drone_uris: ['06', '08'] # 06, 08
 start_positions: [[0.0, 0.0, 0.3]]
 default_speed: 0.1
-step_time: 2
+step_time: 1

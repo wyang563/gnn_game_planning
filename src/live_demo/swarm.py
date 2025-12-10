@@ -1,3 +1,21 @@
+"""
+Crazyflie Swarm Control with Step-by-Step Execution
+
+This script controls one or more Crazyflie drones with manual step progression.
+Commands are organized into steps that execute in parallel across drones.
+After each Goto step, the system pauses and waits for user input.
+
+SETUP:
+1. Set ACTIVE_DRONES to the number of drones you want to use (1 or 2)
+2. Set USE_TWO_DRONES = True/False in the main section to select sequence
+3. Make sure ACTIVE_DRONES matches your sequence (1 for single, 2 for dual)
+
+SEQUENCE FORMAT:
+- List of steps: [step0, step1, step2, ...]
+- Each step: [(drone_id, command), (drone_id, command), ...]
+- All commands in a step execute simultaneously
+"""
+
 import sys
 from pathlib import Path
 
@@ -22,8 +40,9 @@ uris = []
 for uri_num in config["drone_uris"]:
     uris.append(f"radio://0/80/2M/E7E7E7E7{uri_num}")
 
-DEFAULT_SPEED = config["default_speed"]
+# DEFAULT_SPEED = config["default_speed"]
 STEP_TIME = config["step_time"]
+HOVER_TIME = 1000.0
 
 def activate_mellinger_controller(scf, use_mellinger):
     controller = 1
@@ -31,11 +50,9 @@ def activate_mellinger_controller(scf, use_mellinger):
         controller = 2
     scf.cf.param.set_value('stabilizer.controller', str(controller))
 
-
 def arm(scf):
     scf.cf.platform.send_arming_request(True)
     time.sleep(1.0)
-
 
 def crazyflie_control(scf):
     cf = scf.cf
@@ -67,48 +84,92 @@ def crazyflie_control(scf):
             print('Warning! unknown command {} for uri {}'.format(command, cf.uri))
 
 def control_thread():
-    pointer = 0
-    step = 0
     stop = False
+    step_idx = 0
 
     while not stop:
-        print('Step {}:'.format(step))
-        while sequence[pointer][0] <= step:
-            cf_id = sequence[pointer][1]
-            command = sequence[pointer][2]
-
-            print(' - Running: {} on {}'.format(command, cf_id))
+        if step_idx >= len(sequence):
+            print('Reaching the end of the sequence, stopping!')
+            stop = True
+            break
+        
+        step_commands = sequence[step_idx]
+        print(f'\nStep {step_idx}:')
+        
+        # Send all commands in this step to their respective drones
+        max_duration = 0
+        has_goto = False
+        goto_drones = []
+        
+        for cf_id, command in step_commands:
+            print(f' - Running: {command} on drone {cf_id}')
             controlQueues[cf_id].put(command)
-            pointer += 1
-
-            if pointer >= len(sequence):
-                print('Reaching the end of the sequence, stopping!')
-                stop = True
-                break
-
-        step += 1
-        time.sleep(STEP_TIME)
+            
+            # Track the longest duration in this step
+            if type(command) is Goto:
+                max_duration = max(max_duration, command.time)
+                has_goto = True
+                goto_drones.append((cf_id, command))
+            elif type(command) is Takeoff:
+                max_duration = max(max_duration, command.time)
+            elif type(command) is Land:
+                max_duration = max(max_duration, command.time)
+            elif type(command) is Arm:
+                max_duration = max(max_duration, 1.5)
+        
+        # Wait for all commands in this step to complete
+        if max_duration > 0:
+            time.sleep(max_duration + 0.5)
+        
+        # If there were Goto commands, maintain hover and wait for user input
+        if has_goto:
+            # Send long-duration hover commands to maintain position
+            for cf_id, goto_cmd in goto_drones:
+                controlQueues[cf_id].put(Goto(goto_cmd.x, goto_cmd.y, goto_cmd.z, HOVER_TIME))
+                print(f'   Drone {cf_id} hovering at ({goto_cmd.x}, {goto_cmd.y}, {goto_cmd.z})')
+            
+            time.sleep(0.5)  # Brief delay for hover commands to take effect
+            input('\n   All drones in position. Press Enter to proceed to next step...')
+        else:
+            # For non-Goto steps (Arm, Takeoff, Land), just report completion
+            if step_commands and type(step_commands[0][1]) is Takeoff:
+                print('   Takeoff complete for all drones')
+            elif step_commands and type(step_commands[0][1]) is Land:
+                print('   Landing complete for all drones')
+            elif step_commands and type(step_commands[0][1]) is Arm:
+                print('   Arming complete for all drones')
+        
+        step_idx += 1
 
     for ctrl in controlQueues:
         ctrl.put(Quit())
 
 if __name__ == "__main__":
     sequence = [
-        (0, 0, Arm()),
-        (1, 0, Takeoff(0.5, 2)),
-        (2, 0, Goto(-0.5, -0.5, 0.5, 1)),
-        (3, 0, Goto(0.5, 0.5, 0.5, 1)),
-        (4, 0, Land(2))
+        [(0, Arm()), (1, Arm())],
+        [(0, Takeoff(0.5, STEP_TIME)), (1, Takeoff(1.0, STEP_TIME))],
+        [(0, Goto(-0.5, -0.5, 0.5, STEP_TIME)), (1, Goto(0.5, 0.5, 1.0, STEP_TIME))],
+        [(0, Goto(0.5, 0.5, 0.5, STEP_TIME)), (1, Goto(-0.5, -0.5, 1.0, STEP_TIME))],
+        [(0, Goto(-0.5, -0.5, 0.5, STEP_TIME)), (1, Goto(0.5, 0.5, 1.0, STEP_TIME))],
+        [(0, Goto(-0.5, -0.5, 1.5, STEP_TIME)), (1, Goto(0.5, 0.5, 1.5, STEP_TIME))],
+        [(0, Land(2)), (1, Land(2))]
     ]
 
     controlQueues = [Queue() for _ in range(len(uris))]
+    
+    print(f'Configuration:')
+    print(f'  Number of drones: {len(uris)}')
+    print(f'  URIs: {uris}')
+    print(f'  Sequence length: {len(sequence)} commands')
+    print(f'\nAttempting to connect to drones...')
 
     cflib.crtp.init_drivers()
     factory = CachedCfFactory(rw_cache='./cache')
     with Swarm(uris, factory=factory) as swarm:
+        print('All drones connected successfully!')
         swarm.reset_estimators()
 
-        print('Starting sequence!')
+        print('\nStarting sequence!')
 
         threading.Thread(target=control_thread).start()
 
