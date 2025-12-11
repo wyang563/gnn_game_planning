@@ -424,6 +424,23 @@ def control_thread(swarm, goals=None, model=None, model_state=None,
             
             step_idx += 1
 
+    except KeyboardInterrupt:
+        print('\n!!! KEYBOARD INTERRUPT DETECTED !!!')
+        print('!!! SAFE LANDING ALL DRONES !!!')
+        
+        # Send land command to all drones
+        for cf_id in range(num_agents):
+            try:
+                controlQueues[cf_id].put(Land(LAND_TIME))
+                print(f'   Landing command sent to drone {cf_id}')
+            except Exception as land_error:
+                print(f'   Failed to send land command to drone {cf_id}: {land_error}')
+        
+        # Wait for landing to complete
+        print(f'   Waiting {LAND_TIME} seconds for safe landing...')
+        time.sleep(LAND_TIME + 1.0)
+        print('   Safe landing complete')
+        
     except Exception as e:
         print(f'\n!!! ERROR DETECTED: {type(e).__name__}: {e}')
         print('\n!!! FULL STACK TRACE:')

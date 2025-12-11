@@ -15,7 +15,8 @@ def random_init(
         n_agents: Number of agents.
         xy_position_range: (min_xy, max_xy) bounds for x and y coordinates.
         z_position_range: (min_z, max_z) bounds for z coordinate.
-        min_distance: Minimum allowed distance between any two goals.
+        min_distance: Minimum allowed distance between any two goals in the xy plane.
+                      This ensures drones don't land on top of each other.
 
     Returns:
         List of 3D goal positions, where each goal is [x, y, z].
@@ -37,13 +38,15 @@ def random_init(
                 random.uniform(min_z, max_z),    # z
             ]
 
-            # Check minimum distance from other goals
+            # Check minimum distance in xy plane from other goals
             too_close = False
             for existing_goal in goals:
-                distance = math.sqrt(
-                    sum((c1 - c2) ** 2 for c1, c2 in zip(candidate_goal, existing_goal))
+                # Only check xy plane distance (ignore z coordinate)
+                xy_distance = math.sqrt(
+                    (candidate_goal[0] - existing_goal[0]) ** 2 +
+                    (candidate_goal[1] - existing_goal[1]) ** 2
                 )
-                if distance < min_distance:
+                if xy_distance < min_distance:
                     too_close = True
                     break
 
