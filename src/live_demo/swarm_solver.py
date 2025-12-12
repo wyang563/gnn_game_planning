@@ -12,17 +12,24 @@ from queue import Queue
 import random
 import jax.numpy as jnp
 import jax
+from datetime import datetime
 
 import cflib.crtp
 from cflib.crazyflie.swarm import CachedCfFactory
 from cflib.crazyflie.swarm import Swarm
 from utils.ops import Arm, Takeoff, Land, Goto, Ring, Quit
 from utils.config_parser import parse_config
-from utils.init_goals import random_init
+from utils.init_goals import sim_random_init
 from models.train_gnn import load_trained_gnn_models
 from solver.drone_agent import DroneAgent
 from solver.solve import create_batched_loss_functions_mask
 from load_config import load_config
+from utils.plot import (
+    plot_drone_agent_trajs,
+    plot_drone_agent_trajs_gif,
+    plot_drone_agent_mask_png,
+    plot_drone_agent_gif
+)
 
 config = parse_config("src/live_demo/live_config.yaml")
 main_config = load_config()
@@ -38,6 +45,7 @@ LAND_TIME = config["land_time"]
 MIN_GOAL_DISTANCE = config["min_goal_separation_distance"]
 XY_POSITION_RANGE = config["xy_position_range"]
 Z_POSITION_RANGE = config["z_position_range"]
+STAGGER = config["stagger"]
 T_total = config["T_total"]
 # T_total = 0
 
@@ -147,7 +155,7 @@ def get_player_masks(step_idx, x_trajs, model, model_state, mask_horizon, mask_t
 
 def solve_game(step_idx, player_masks, init_positions, ref_trajs, 
                agents, jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve,
-               planning_horizon, num_iters, step_size, pos_dim, u_dim):
+               planning_horizon, num_iters, step_size, pos_dim, u_dim, stagger=1):
     n_agents = len(agents)
     
     # Setup horizon arrays
@@ -189,8 +197,8 @@ def solve_game(step_idx, player_masks, init_positions, ref_trajs,
         next_x_trajs, _, _ = jit_batched_linearize_dyn(horizon_x0s, horizon_u_trajs)
     
     # Return the first control in the optimized horizon
-    next_controls = horizon_u_trajs[:, 0, :]
-    next_x_waypoints = next_x_trajs[:, 1, :]
+    next_controls = horizon_u_trajs[:, :stagger, :]
+    next_x_waypoints = next_x_trajs[:, 1:stagger+1, :]
     return next_controls, next_x_waypoints 
 
 def validate_waypoint_safety(position, agent_id, xy_range, z_range):
@@ -224,7 +232,7 @@ def validate_waypoint_safety(position, agent_id, xy_range, z_range):
     
     return True
 
-def control_thread(swarm, goals=None, model=None, model_state=None, 
+def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None, 
                   agents=None, jit_batched_linearize_dyn=None, jit_batched_linearize_loss=None,
                   jit_batched_solve=None, opt_params=None):
     """
@@ -244,6 +252,7 @@ def control_thread(swarm, goals=None, model=None, model_state=None,
     stop = False
     step_idx = 0
     num_agents = len(goals) if goals is not None else 0
+    commands_left = 0  # Initialize to 0 to trigger first solve after takeoff
     
     # Extract parameters
     u_dim = opt_params['u_dim']
@@ -254,6 +263,9 @@ def control_thread(swarm, goals=None, model=None, model_state=None,
     x_trajs = jnp.zeros((num_agents, T_total + 1, x_dim))  # +1 for initial state
     ref_trajs = None  # Will be initialized after takeoff
     init_states = None
+    
+    # Store masks collected during simulation (list of masks at each timestep)
+    simulation_masks = []
 
     try:
         while not stop:
@@ -295,57 +307,69 @@ def control_thread(swarm, goals=None, model=None, model_state=None,
                 
                 # Calculate simulation timestep (account for arm and takeoff steps)
                 sim_timestep = step_idx - 2  # First goto is at sequence[2], which is sim_timestep 0
-                
-                # Calculate trajectories up to current point using controls
-                for agent_id in range(num_agents):
-                    agent_x_traj, _, _ = agents[agent_id].linearize_dyn(init_states[agent_id], control_trajs[agent_id])
-                    x_trajs = x_trajs.at[agent_id, :agent_x_traj.shape[0]].set(agent_x_traj)
-                
-                # Get current positions from trajectories
-                current_positions = x_trajs[:, sim_timestep]
-                
-                print(f'   Computing optimal controls for timestep {sim_timestep}...')
-                
-                # Get player masks from GNN model
-                player_masks = get_player_masks(sim_timestep, x_trajs, model, model_state, 
-                                               opt_params['mask_horizon'], opt_params['mask_threshold'])
-                
-                # Solve for optimal next controls
-                next_controls, next_x_trajs = solve_game(
-                    sim_timestep,
-                    player_masks,
-                    current_positions,
-                    ref_trajs,
-                    agents,
-                    jit_batched_linearize_dyn,
-                    jit_batched_linearize_loss,
-                    jit_batched_solve,
-                    opt_params['planning_horizon'],
-                    opt_params['num_iters'],
-                    opt_params['step_size'],
-                    opt_params['pos_dim'],
-                    opt_params['u_dim'],
-                )
-                
-                # Update control trajectory with new optimal controls
-                control_trajs = control_trajs.at[:, sim_timestep, :].set(next_controls)
-                
-                # Create next goto commands from optimized trajectory
-                # Use the first position from the optimized trajectory (index 1, since index 0 is current state)
-                next_goto_sequence = []
-                for agent_id in range(num_agents):
-                    # Extract position from next state in optimized trajectory
-                    next_pos = next_x_trajs[agent_id, :3]  # First 3 elements are [x, y, z]
+
+                # if no commands left, solve for optimal controls
+                if commands_left <= 0:
+                    # Calculate trajectories up to current point using controls
+                    for agent_id in range(num_agents):
+                        agent_x_traj, _, _ = agents[agent_id].linearize_dyn(init_states[agent_id], control_trajs[agent_id])
+                        x_trajs = x_trajs.at[agent_id, :agent_x_traj.shape[0]].set(agent_x_traj)
                     
-                    # Validate waypoint safety before sending command
-                    validate_waypoint_safety(next_pos, agent_id, XY_POSITION_RANGE, Z_POSITION_RANGE)
+                    # Get current positions from trajectories
+                    current_positions = x_trajs[:, sim_timestep]
                     
-                    print(f'   Drone {agent_id} next waypoint: ({next_pos[0]:.3f}, {next_pos[1]:.3f}, {next_pos[2]:.3f})')
-                    next_goto_sequence.append((agent_id, Goto(float(next_pos[0]), float(next_pos[1]), float(next_pos[2]), STEP_TIME)))
-                
-                # Update sequence with new goto commands for next step
-                if step_idx + 1 < len(sequence) - 1:  # Don't overwrite land sequence
-                    sequence[step_idx + 1] = next_goto_sequence
+                    print(f'   Computing optimal controls for timestep {sim_timestep}...')
+                    
+                    # Get player masks from GNN model
+                    player_masks = get_player_masks(sim_timestep, x_trajs, model, model_state, 
+                                                opt_params['mask_horizon'], opt_params['mask_threshold'])
+                    
+                    # Store masks for each stagger timestep (since one solve covers multiple timesteps)
+                    for _ in range(stagger):
+                        simulation_masks.append(player_masks)
+                    
+                    # Solve for optimal next controls
+                    next_controls, next_x_trajs = solve_game(
+                        sim_timestep,
+                        player_masks,
+                        current_positions,
+                        ref_trajs,
+                        agents,
+                        jit_batched_linearize_dyn,
+                        jit_batched_linearize_loss,
+                        jit_batched_solve,
+                        opt_params['planning_horizon'],
+                        opt_params['num_iters'],
+                        opt_params['step_size'],
+                        opt_params['pos_dim'],
+                        opt_params['u_dim'],
+                    )
+                    
+                    # Update control trajectory with new optimal controls
+                    end_ind = min(sim_timestep + stagger, T_total)
+                    control_trajs = control_trajs.at[:, sim_timestep:end_ind, :].set(next_controls)
+                    x_trajs = x_trajs.at[:, sim_timestep:end_ind, :].set(next_x_trajs)
+                    
+                    # Create next stagger goto commands from optimized trajectory
+                    for t in range(stagger):
+                        timestep_commands = []
+                        for agent_id in range(num_agents):
+                            # Extract position from next state in optimized trajectory
+                            next_position = next_x_trajs[agent_id, t, :3]  # First 3 elements are [x, y, z]
+                            
+                            # Validate waypoint safety before sending command
+                            validate_waypoint_safety(next_position, agent_id, XY_POSITION_RANGE, Z_POSITION_RANGE)
+                            timestep_commands.append((agent_id, Goto(float(next_position[0]), float(next_position[1]), float(next_position[2]), STEP_TIME)))
+                        
+                        # Update sequence with new goto commands for next timesteps
+                        if step_idx + 1 + t < len(sequence) - 1:  # Don't overwrite land sequence
+                            sequence[step_idx + 1 + t] = timestep_commands.copy()
+                    
+                    # set commands left before next solve needed
+                    commands_left = stagger - 1
+                else:
+                    # Decrement commands left if not solving
+                    commands_left -= 1
 
             elif step_commands and type(step_commands[0][1]) is Takeoff:
                 print('   Takeoff complete for all drones')
@@ -382,6 +406,10 @@ def control_thread(swarm, goals=None, model=None, model_state=None,
                 # For first step, use all agents (no history for masks yet, so use all-to-all)
                 player_masks = jnp.ones((num_agents, num_agents)) - jnp.eye(num_agents)
                 
+                # Store masks for each stagger timestep
+                for _ in range(stagger):
+                    simulation_masks.append(player_masks)
+                
                 # Solve for first optimal controls
                 first_controls, first_x_trajs = solve_game(
                     step_idx=0,
@@ -400,23 +428,24 @@ def control_thread(swarm, goals=None, model=None, model_state=None,
                 )
                 
                 # Update control trajectory
-                control_trajs = control_trajs.at[:, 0, :].set(first_controls)
+                control_trajs = control_trajs.at[:, :stagger, :].set(first_controls)
                 
-                # Create first goto commands from optimized trajectory
-                # Use the first position from the optimized trajectory (index 1, since index 0 is current state)
-                first_goto_sequence = []
-                for agent_id in range(num_agents):
-                    # Extract position from next state in optimized trajectory
-                    next_pos = first_x_trajs[agent_id, :3]  # First 3 elements are [x, y, z]
-                    
-                    # Validate waypoint safety before sending command
-                    validate_waypoint_safety(next_pos, agent_id, XY_POSITION_RANGE, Z_POSITION_RANGE)
-                    
-                    print(f'   Drone {agent_id} first waypoint: ({next_pos[0]:.3f}, {next_pos[1]:.3f}, {next_pos[2]:.3f})')
-                    first_goto_sequence.append((agent_id, Goto(float(next_pos[0]), float(next_pos[1]), float(next_pos[2]), STEP_TIME)))
+                x_trajs = x_trajs.at[:, :stagger, :].set(first_x_trajs)
                 
-                # Update sequence with first goto commands (sequence[2])
-                sequence[2] = first_goto_sequence
+                for t in range(stagger):
+                    timestep_commands = []
+                    for agent_id in range(num_agents):
+                        # Extract position from next state in optimized trajectory
+                        next_position = first_x_trajs[agent_id, t, :3]  # First 3 elements are [x, y, z]
+                        
+                        # Validate waypoint safety before sending command
+                        validate_waypoint_safety(next_position, agent_id, XY_POSITION_RANGE, Z_POSITION_RANGE)
+                        timestep_commands.append((agent_id, Goto(float(next_position[0]), float(next_position[1]), float(next_position[2]), STEP_TIME)))
+                    sequence[2 + t] = timestep_commands.copy()
+                
+                # set commands left before next solve needed
+                commands_left = stagger - 1
+
             elif step_commands and type(step_commands[0][1]) is Land:
                 print('   Landing complete for all drones')
             elif step_commands and type(step_commands[0][1]) is Arm:
@@ -464,6 +493,88 @@ def control_thread(swarm, goals=None, model=None, model_state=None,
         # Always send Quit commands to cleanly exit drone control threads
         for ctrl in controlQueues:
             ctrl.put(Quit())
+        
+        # Generate plots after execution
+        print('\n=== Generating plots ===')
+        try:
+            # Create unique timestamp directory for saving plots
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            plot_dir = Path(f"plots/live_demo/{timestamp}")
+            plot_dir.mkdir(parents=True, exist_ok=True)
+            print(f'Saving plots to: {plot_dir}')
+            
+            # Convert JAX arrays to numpy for plotting
+            x_trajs_np = jnp.array(x_trajs)
+            goals_np = jnp.array(goals)
+            init_positions_np = init_states[:, :3] if init_states is not None else jnp.zeros((num_agents, 3))
+            
+            # 1. Plot basic trajectories (PNG)
+            print('  Generating trajectory plot...')
+            plot_drone_agent_trajs(
+                x_trajs_np,
+                goals_np,
+                init_positions_np,
+                title=f'Live Demo Trajectories (N={num_agents})',
+                save_path=str(plot_dir / 'trajectories.png')
+            )
+            
+            # 2. Generate trajectory GIF
+            print('  Generating trajectory GIF...')
+            plot_drone_agent_trajs_gif(
+                x_trajs_np,
+                goals_np,
+                init_positions_np,
+                save_path=str(plot_dir / 'trajectories.gif'),
+                fps=10,
+                title=f'Live Demo Trajectories (N={num_agents})'
+            )
+            
+            # 3. Generate masked trajectory plots for each agent
+            if len(simulation_masks) > 0:
+                print('  Generating masked trajectory plots...')
+                # Stack masks: (T_total, n_agents, n_agents)
+                all_masks = jnp.stack(simulation_masks, axis=0)
+                
+                # Ensure we have the right number of masks (should be T_total)
+                if all_masks.shape[0] > T_total:
+                    all_masks = all_masks[:T_total]
+                elif all_masks.shape[0] < T_total:
+                    print(f'  Warning: Only {all_masks.shape[0]} masks collected for {T_total} timesteps')
+                
+                # Generate masked plots for each agent
+                for ego_id in range(num_agents):
+                    print(f'    Agent {ego_id}...')
+                    # Extract masks for this ego agent: (T_total, n_agents)
+                    ego_masks = all_masks[:, ego_id, :]
+                    
+                    # 3a. Masked trajectory PNG
+                    plot_drone_agent_mask_png(
+                        x_trajs_np,
+                        goals_np,
+                        init_positions_np,
+                        ego_masks,
+                        ego_id,
+                        save_path=str(plot_dir / f'masked_trajectory_agent{ego_id}.png')
+                    )
+                    
+                    # 3b. Masked trajectory GIF
+                    plot_drone_agent_gif(
+                        x_trajs_np,
+                        goals_np,
+                        init_positions_np,
+                        ego_masks,
+                        ego_id,
+                        save_path=str(plot_dir / f'masked_trajectory_agent{ego_id}.gif'),
+                        fps=10
+                    )
+            else:
+                print('  Warning: No masks collected during simulation, skipping masked plots')
+            
+            print(f'\n✓ All plots saved to: {plot_dir}')
+            
+        except Exception as plot_error:
+            print(f'\n!!! Error generating plots: {plot_error}')
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
@@ -501,7 +612,7 @@ if __name__ == "__main__":
     controlQueues = [Queue() for _ in range(len(uris))]
 
     # generate random goals
-    goals = random_init(num_agents, xy_position_range=[-1.5, 1.5], z_position_range=[0.25, 1.5], min_distance=MIN_GOAL_DISTANCE)
+    goals = sim_random_init(num_agents, xy_position_range=[-1.5, 1.5], z_position_range=[0.25, 1.5], min_distance=MIN_GOAL_DISTANCE)
 
     # load GNN model for player selection
     model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity/20251203_144008/psn_best_model.pkl" 
@@ -543,7 +654,7 @@ if __name__ == "__main__":
 
         print('\nStarting sequence!')
 
-        threading.Thread(target=control_thread, args=(swarm, goals, model, model_state, 
+        threading.Thread(target=control_thread, args=(swarm, STAGGER, goals, model, model_state, 
                                                       agents, jit_batched_linearize_dyn, 
                                                       jit_batched_linearize_loss, jit_batched_solve,
                                                       opt_params)).start()

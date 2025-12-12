@@ -1,8 +1,9 @@
-drone_uris: ['03', '08'] 
+drone_uris: ['01', '02', '05']
 default_speed: 0.1
-step_time: 3
+step_time: 1
 land_time: 10.0
 T_total: 25
 min_goal_separation_distance: 0.5
+stagger: 5
 xy_position_range: [-1.5, 1.5]
 z_position_range: [0.25, 1.5]
