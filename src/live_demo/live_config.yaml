@@ -1,4 +1,4 @@
-drone_uris: ['01', '02', '05']
+drone_uris: ['03']
 default_speed: 0.1
 step_time: 1
 land_time: 10.0
