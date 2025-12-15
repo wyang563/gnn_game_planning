@@ -1,15 +1,14 @@
 """
 Simple demo to fly a single drone through a series of waypoints using polynomial trajectories.
 
-This demonstrates smooth trajectory execution by uploading polynomial trajectories to the drone
-and executing them using the high-level trajectory API.
+This demonstrates smooth trajectory execution by generating polynomial trajectories and
+streaming them to the drone at high frequency using goto commands.
 
 Commands are executed sequentially using the same pattern as swarm_demo.py:
 1. Arm
 2. Takeoff
-3. Upload trajectory (polynomial pieces)
-4. Start trajectory execution
-5. Land
+3. Execute trajectory (stream polynomial waypoints at 10Hz)
+4. Land
 
 Usage:
     python polynomial_trajectory_demo.py
@@ -17,7 +16,6 @@ Usage:
 Requirements:
     - One Crazyflie drone connected via radio
     - Update drone_uri in live_config.yaml to match your drone's address
-    - Firmware with trajectory API support
 """
 
 import sys
@@ -37,9 +35,10 @@ import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 
-from utils.trajectory_utils import simple_polynomial_trajectory, format_trajectory_for_crazyflie
-from utils.ops import Arm, Takeoff, Land, Goto, Quit, UploadTrajectory, StartTrajectory
+from utils.trajectory_utils import simple_polynomial_trajectory
+from utils.ops import Arm, Takeoff, Land, Goto, Quit, ExecuteTrajectory
 from utils.config_parser import parse_config
+from collections import namedtuple
 
 # ===== LOAD CONFIGURATION =====
 config = parse_config("src/live_demo/live_config.yaml")
@@ -148,19 +147,59 @@ def crazyflie_control(scf):
             commander.land(0.0, command.time)
         elif type(command) is Goto:
             commander.go_to(command.x, command.y, command.z, 0, command.time)
-        elif type(command) is UploadTrajectory:
-            print(f"  Executing: Upload trajectory {command.trajectory_id}")
-            # Upload polynomial pieces to drone
-            cf.high_level_commander.define_trajectory(command.trajectory_id, 0, len(command.pieces))
-            for i, piece in enumerate(command.pieces):
-                cf.high_level_commander.define_trajectory(
-                    command.trajectory_id, 
-                    i, 
-                    piece
-                )
-        elif type(command) is StartTrajectory:
-            print(f"  Executing: Start trajectory {command.trajectory_id} (timescale={command.timescale}, relative={command.relative})")
-            commander.start_trajectory(command.trajectory_id, command.timescale, command.relative)
+        elif type(command) is ExecuteTrajectory:
+            print(f"  Executing: Streaming polynomial trajectory")
+            # Stream trajectory by evaluating polynomials at high frequency
+            dt = 1.0 / command.sample_rate
+            total_duration = sum(piece.duration for piece in command.pieces)
+            
+            print(f"  Sample rate: {command.sample_rate} Hz, Duration: {total_duration:.1f}s")
+            
+            t = 0.0
+            piece_start_time = 0.0
+            piece_idx = 0
+            
+            while t < total_duration and piece_idx < len(command.pieces):
+                # Find which piece we're currently in
+                current_piece = command.pieces[piece_idx]
+                t_local = t - piece_start_time
+                
+                # Check if we need to move to next piece
+                if t_local >= current_piece.duration and piece_idx < len(command.pieces) - 1:
+                    piece_start_time += current_piece.duration
+                    piece_idx += 1
+                    current_piece = command.pieces[piece_idx]
+                    t_local = t - piece_start_time
+                
+                # Evaluate position at this time
+                x, y, z, _ = current_piece.evaluate(t_local)
+                
+                # Validate position
+                try:
+                    validate_waypoint_safety([x, y, z], XY_POSITION_RANGE, Z_POSITION_RANGE)
+                except ValueError as e:
+                    print(f"  ✗ Safety violation at t={t:.2f}s: {e}")
+                    break
+                
+                # Send goto command
+                commander.go_to(x, y, z, 0, dt * 1.5)
+                
+                # Progress indicator (every 0.5 seconds)
+                if int(t * 2) != int((t - dt) * 2):
+                    progress = (t / total_duration) * 100
+                    print(f"    Progress: {progress:.0f}% - Position: ({x:.2f}, {y:.2f}, {z:.2f})")
+                
+                # Wait for next sample time
+                time.sleep(dt)
+                t += dt
+            
+            # Hold final position briefly
+            final_piece = command.pieces[-1]
+            x, y, z, yaw = final_piece.evaluate(final_piece.duration)
+            commander.go_to(x, y, z, 0, 1.0)
+            time.sleep(1.0)
+            
+            print(f"  ✓ Trajectory execution complete")
         else:
             print(f'Warning! Unknown command {command}')
 
@@ -277,12 +316,9 @@ def generate_trajectory():
     print(f"✓ Generated {len(trajectory_pieces)} trajectory pieces")
 
     # Plot simple polynomial trajectory
-    plot_polynomial_trajectory(WAYPOINTS, trajectory_pieces)
+    # plot_polynomial_trajectory(WAYPOINTS, trajectory_pieces)
     
     return trajectory_pieces
-
-
-
 
 def control_thread(sequence):
     """
@@ -311,13 +347,10 @@ def control_thread(sequence):
                 time.sleep(command.time + 1.0)
             elif type(command) is Goto:
                 time.sleep(command.time + 0.5)
-            elif type(command) is UploadTrajectory:
-                time.sleep(0.5)  # Brief pause after upload
-            elif type(command) is StartTrajectory:
-                # Calculate total trajectory duration
-                total_duration = sum(piece.duration for piece in TRAJECTORY_PIECES) if TRAJECTORY_PIECES else FLIGHT_DURATION
-                print(f"  Waiting {total_duration:.1f}s for trajectory to complete...")
-                time.sleep(total_duration + 1.0)
+            elif type(command) is ExecuteTrajectory:
+                # The trajectory execution happens inside the command handler
+                # and blocks until complete, so no need to wait here
+                pass
             
             step_idx += 1
         
@@ -383,16 +416,11 @@ def main():
     # Generate trajectory before connecting to drone
     TRAJECTORY_PIECES = generate_trajectory()
     
-    # Format trajectory for Crazyflie
-    formatted_pieces = format_trajectory_for_crazyflie(TRAJECTORY_PIECES)
-    
     # Create command sequence
-    TRAJECTORY_ID = 1
     sequence = [
         Arm(),
         Takeoff(TAKEOFF_HEIGHT, STEP_TIME),
-        UploadTrajectory(TRAJECTORY_ID, formatted_pieces),
-        StartTrajectory(TRAJECTORY_ID, timescale=1.0, relative=False),
+        ExecuteTrajectory(TRAJECTORY_PIECES, sample_rate=10),  # Stream at 10 Hz
         Land(LAND_TIME)
     ]
     
