@@ -7,9 +7,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import threading
 import time
 import traceback
-from collections import namedtuple
 from queue import Queue
 import random
+import numpy as np
 import jax.numpy as jnp
 import jax
 from datetime import datetime
@@ -17,9 +17,10 @@ from datetime import datetime
 import cflib.crtp
 from cflib.crazyflie.swarm import CachedCfFactory
 from cflib.crazyflie.swarm import Swarm
-from utils.ops import Arm, Takeoff, Land, Goto, Ring, Quit
+from utils.ops import Arm, Takeoff, Land, Quit, ExecuteTrajectory
 from utils.config_parser import parse_config
 from utils.init_goals import sim_random_init
+from utils.trajectory_utils import simple_polynomial_trajectory
 from models.train_gnn import load_trained_gnn_models
 from solver.drone_agent import DroneAgent
 from solver.solve import create_batched_loss_functions_mask
@@ -47,7 +48,6 @@ XY_POSITION_RANGE = config["xy_position_range"]
 Z_POSITION_RANGE = config["z_position_range"]
 STAGGER = config["stagger"]
 T_total = config["T_total"]
-# T_total = 0
 
 # Game theory optimization parameters
 dt = main_config.game.dt
@@ -64,7 +64,7 @@ R = jnp.diag(jnp.array(opt_config.R))
 x_dim = opt_config.state_dim
 pos_dim = x_dim // 2
 u_dim = opt_config.control_dim
-mask_threshold = main_config.testing.receding_horizon.mask_threshold
+mask_threshold = config["mask_threshold"]
 
 def generate_straight_line_reference_trajectory(start_pos, goal_pos, num_steps):
     """
@@ -117,11 +117,49 @@ def crazyflie_control(scf):
             commander.takeoff(command.height, command.time)
         elif type(command) is Land:
             commander.land(0.0, command.time)
-        elif type(command) is Goto:
-            commander.go_to(command.x, command.y, command.z, 0, command.time)
-        elif type(command) is Ring:
-            # TODO: implement
-            pass
+        elif type(command) is ExecuteTrajectory:
+            # Stream trajectory by evaluating polynomials at high frequency
+            dt = 1.0 / command.sample_rate
+            total_duration = sum(piece.duration for piece in command.pieces)
+            
+            t = 0.0
+            piece_start_time = 0.0
+            piece_idx = 0
+            
+            while t < total_duration and piece_idx < len(command.pieces):
+                # Find which piece we're currently in
+                current_piece = command.pieces[piece_idx]
+                t_local = t - piece_start_time
+                
+                # Check if we need to move to next piece
+                if t_local >= current_piece.duration and piece_idx < len(command.pieces) - 1:
+                    piece_start_time += current_piece.duration
+                    piece_idx += 1
+                    current_piece = command.pieces[piece_idx]
+                    t_local = t - piece_start_time
+                
+                # Evaluate position at this time
+                x, y, z, _ = current_piece.evaluate(t_local)
+                
+                # Validate position
+                try:
+                    validate_waypoint_safety([x, y, z], uris.index(cf.link_uri), XY_POSITION_RANGE, Z_POSITION_RANGE)
+                except ValueError as e:
+                    print(f"  ✗ Safety violation at t={t:.2f}s: {e}")
+                    break
+                
+                # Send goto command
+                commander.go_to(x, y, z, 0, dt * 1.5)
+                
+                # Wait for next sample time
+                time.sleep(dt)
+                t += dt
+            
+            # Hold final position briefly
+            final_piece = command.pieces[-1]
+            x, y, z, _ = final_piece.evaluate(final_piece.duration)
+            commander.go_to(x, y, z, 0, 1.0)
+            time.sleep(1.0)
         else:
             print('Warning! unknown command {} for uri {}'.format(command, cf.uri))
 
@@ -198,7 +236,7 @@ def solve_game(step_idx, player_masks, init_positions, ref_trajs,
     
     # Return the first control in the optimized horizon
     next_controls = horizon_u_trajs[:, :stagger, :]
-    next_x_waypoints = next_x_trajs[:, 1:stagger+1, :]
+    next_x_waypoints = next_x_trajs[:, :stagger, :]
     return next_controls, next_x_waypoints 
 
 def validate_waypoint_safety(position, agent_id, xy_range, z_range):
@@ -249,18 +287,14 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
         jit_batched_solve: Batched solver function
         opt_params: Dictionary of optimization parameters
     """
-    stop = False
     step_idx = 0
     num_agents = len(goals) if goals is not None else 0
-    commands_left = 0  # Initialize to 0 to trigger first solve after takeoff
     
     # Extract parameters
     u_dim = opt_params['u_dim']
-    x_dim = opt_params['x_dim']
     
     # Initialize trajectory arrays (n_agents, T_total, dim)
     control_trajs = jnp.zeros((num_agents, T_total, u_dim))
-    x_trajs = jnp.zeros((num_agents, T_total + 1, x_dim))  # +1 for initial state
     ref_trajs = None  # Will be initialized after takeoff
     init_states = None
     
@@ -268,10 +302,9 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
     simulation_masks = []
 
     try:
-        while not stop:
+        while True:
             if step_idx >= len(sequence):
                 print('Reaching the end of the sequence, stopping!')
-                stop = True
                 break
             
             step_commands = sequence[step_idx]
@@ -279,16 +312,16 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
             
             # Send all commands in this step to their respective drones
             max_duration = 0
-            goto_drones = []
             
             for cf_id, command in step_commands:
                 print(f' - Running: {command} on drone {cf_id}')
                 controlQueues[cf_id].put(command)
                 
                 # Track the longest duration in this step
-                if type(command) is Goto:
-                    max_duration = max(max_duration, command.time)
-                    goto_drones.append((cf_id, command))
+                if type(command) is ExecuteTrajectory:
+                    # Calculate total duration for the trajectory
+                    traj_duration = sum(piece.duration for piece in command.pieces)
+                    max_duration = max(max_duration, traj_duration)
                 elif type(command) is Takeoff:
                     max_duration = max(max_duration, command.time)
                 elif type(command) is Land:
@@ -300,22 +333,36 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
             if max_duration > 0:
                 time.sleep(max_duration + 0.5)
             
-            # If there were Goto commands, compute next waypoint
-            if step_commands and type(step_commands[0][1]) is Goto:
-                for cf_id, goto_cmd in goto_drones:
-                    print(f'   Drone {cf_id} hovering at ({goto_cmd.x}, {goto_cmd.y}, {goto_cmd.z})')
+            # If there were ExecuteTrajectory commands, compute next waypoint
+            if step_commands and type(step_commands[0][1]) is ExecuteTrajectory:
+                print(f'   Trajectory execution complete for all drones')
                 
                 # Calculate simulation timestep (account for arm and takeoff steps)
-                sim_timestep = step_idx - 2  # First goto is at sequence[2], which is sim_timestep 0
+                # Each ExecuteTrajectory covers 'stagger' timesteps
+                trajectory_idx = step_idx - 2  # First trajectory is at sequence[2]
+                sim_timestep = trajectory_idx * stagger  # Actual timestep in the full trajectory
 
-                # if no commands left, solve for optimal controls
-                if commands_left <= 0:
+                # Solve for optimal controls for next trajectory segment
+                if sim_timestep < T_total:
                     # Calculate trajectories up to current point using controls
-                    for agent_id in range(num_agents):
-                        agent_x_traj, _, _ = agents[agent_id].linearize_dyn(init_states[agent_id], control_trajs[agent_id])
-                        x_trajs = x_trajs.at[agent_id, :agent_x_traj.shape[0]].set(agent_x_traj)
+                    x_trajs, _, _ = jit_batched_linearize_dyn(init_states, control_trajs)
                     
-                    # Get current positions from trajectories
+                    # Get current positions from drones
+                    radio_positions = []
+                    positions_dict = swarm.get_estimated_positions()
+                    for i, uri in enumerate(uris):
+                        pos = positions_dict.get(uri)
+                        if pos:
+                            state = [pos.x, pos.y, pos.z]
+                        else:
+                            raise ValueError(f'Position not available for drone {uri}')
+                        radio_positions.append(state)
+                        print(f'   Drone {uris.index(uri)} radio at position: [{state}]')
+                        print(f'   Drone {uris.index(uri)} simulation position: [{x_trajs[i, sim_timestep, :]}]')
+                    
+                    # current_positions = jnp.array(current_positions)
+                    # current_positions = jnp.concatenate([current_positions, x_trajs[:, sim_timestep, u_dim:]], axis=1)
+                
                     current_positions = x_trajs[:, sim_timestep]
                     
                     print(f'   Computing optimal controls for timestep {sim_timestep}...')
@@ -343,33 +390,59 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
                         opt_params['step_size'],
                         opt_params['pos_dim'],
                         opt_params['u_dim'],
+                        stagger
                     )
                     
                     # Update control trajectory with new optimal controls
                     end_ind = min(sim_timestep + stagger, T_total)
                     control_trajs = control_trajs.at[:, sim_timestep:end_ind, :].set(next_controls)
-                    x_trajs = x_trajs.at[:, sim_timestep:end_ind, :].set(next_x_trajs)
+                    # x_trajs = x_trajs.at[:, sim_timestep:end_ind, :].set(next_x_trajs)
                     
-                    # Create next stagger goto commands from optimized trajectory
-                    for t in range(stagger):
-                        timestep_commands = []
-                        for agent_id in range(num_agents):
-                            # Extract position from next state in optimized trajectory
-                            next_position = next_x_trajs[agent_id, t, :3]  # First 3 elements are [x, y, z]
-                            
-                            # Validate waypoint safety before sending command
-                            validate_waypoint_safety(next_position, agent_id, XY_POSITION_RANGE, Z_POSITION_RANGE)
-                            timestep_commands.append((agent_id, Goto(float(next_position[0]), float(next_position[1]), float(next_position[2]), STEP_TIME)))
+                    # Generate polynomial trajectories for each agent using the stagger points
+                    timestep_commands = []
+                    for agent_id in range(num_agents):
+                        # Extract positions and velocities for stagger waypoints
+                        # next_x_trajs now includes current state at index 0 through stagger-1 future states
+                        waypoints = []
+                        velocities = []
                         
-                        # Update sequence with new goto commands for next timesteps
-                        if step_idx + 1 + t < len(sequence) - 1:  # Don't overwrite land sequence
-                            sequence[step_idx + 1 + t] = timestep_commands.copy()
+                        # Add all stagger waypoints (includes current state at index 0)
+                        for t in range(stagger):
+                            state = next_x_trajs[agent_id, t, :]
+                            waypoints.append(state[:3])
+                            velocities.append(state[3:])
+                        
+                        waypoints = jnp.array(waypoints)
+                        velocities = jnp.array(velocities)
+                        
+                        # Validate all waypoints before generating trajectory
+                        for waypoint in waypoints:
+                            validate_waypoint_safety(waypoint, agent_id, XY_POSITION_RANGE, Z_POSITION_RANGE)
+                        
+                        # Calculate duration for each segment (time between waypoints)
+                        # Use dt from config for each timestep
+                        # We have stagger waypoints, so stagger-1 segments
+                        durations = jnp.full(stagger - 1, dt)
+                        
+                        # Convert to numpy arrays for trajectory generation
+                        waypoints_np = np.array(waypoints)
+                        velocities_np = np.array(velocities)
+                        durations_np = np.array(durations)
+                        
+                        # Generate polynomial trajectory
+                        trajectory_pieces = simple_polynomial_trajectory(
+                            waypoints_np, 
+                            velocities_np, 
+                            durations_np, 
+                            yaw=0.0
+                        )
+                        
+                        # Create ExecuteTrajectory command with 10Hz sample rate
+                        timestep_commands.append((agent_id, ExecuteTrajectory(trajectory_pieces, sample_rate=10)))
                     
-                    # set commands left before next solve needed
-                    commands_left = stagger - 1
-                else:
-                    # Decrement commands left if not solving
-                    commands_left -= 1
+                    # Update sequence with new ExecuteTrajectory command
+                    if step_idx + 1 < len(sequence) - 1:  # Don't overwrite land sequence
+                        sequence[step_idx + 1] = timestep_commands.copy()
 
             elif step_commands and type(step_commands[0][1]) is Takeoff:
                 print('   Takeoff complete for all drones')
@@ -389,8 +462,8 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
                 # Initialize states with positions and zero velocities: [x, y, z, vx, vy, vz]
                 init_states = jnp.array([[pos[0], pos[1], pos[2], 0.0, 0.0, 0.0] for pos in init_positions_list])
                 
-                # Set initial states in trajectory array
-                x_trajs = x_trajs.at[:, 0, :].set(init_states)
+                # # Set initial states in trajectory array
+                x_trajs, _, _ = jit_batched_linearize_dyn(init_states, control_trajs)
                 
                 # Generate straight-line reference trajectories (position only)
                 ref_trajs_list = []
@@ -403,8 +476,7 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
                 
                 # Compute first goto command
                 print('   Computing initial optimal controls...')
-                # For first step, use all agents (no history for masks yet, so use all-to-all)
-                player_masks = jnp.ones((num_agents, num_agents)) - jnp.eye(num_agents)
+                player_masks = get_player_masks(0, x_trajs, model, model_state, opt_params['mask_horizon'], opt_params['mask_threshold'])
                 
                 # Store masks for each stagger timestep
                 for _ in range(stagger):
@@ -425,26 +497,55 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
                     step_size=opt_params['step_size'],
                     pos_dim=opt_params['pos_dim'],
                     u_dim=opt_params['u_dim'],
+                    stagger=stagger
                 )
                 
                 # Update control trajectory
                 control_trajs = control_trajs.at[:, :stagger, :].set(first_controls)
                 
-                x_trajs = x_trajs.at[:, :stagger, :].set(first_x_trajs)
+                # Generate polynomial trajectories for each agent using the first stagger points
+                timestep_commands = []
+                for agent_id in range(num_agents):
+                    # Extract positions and velocities for stagger waypoints
+                    # first_x_trajs now includes current state at index 0 through stagger-1 future states
+                    waypoints = []
+                    velocities = []
+                    
+                    # Add all stagger waypoints (includes current state at index 0)
+                    for t in range(stagger):
+                        state = first_x_trajs[agent_id, t, :]
+                        waypoints.append(state[:u_dim])
+                        velocities.append(state[u_dim:])
+                    
+                    waypoints = jnp.array(waypoints)
+                    velocities = jnp.array(velocities)
+                    
+                    # Validate all waypoints before generating trajectory
+                    for waypoint in waypoints:
+                        validate_waypoint_safety(waypoint, agent_id, XY_POSITION_RANGE, Z_POSITION_RANGE)
+                    
+                    # Calculate duration for each segment
+                    # We have stagger waypoints, so stagger-1 segments
+                    durations = jnp.full(stagger - 1, dt)
+                    
+                    # Convert to numpy arrays for trajectory generation
+                    waypoints_np = np.array(waypoints)
+                    velocities_np = np.array(velocities)
+                    durations_np = np.array(durations)
+                    
+                    # Generate polynomial trajectory
+                    trajectory_pieces = simple_polynomial_trajectory(
+                        waypoints_np, 
+                        velocities_np, 
+                        durations_np, 
+                        yaw=0.0
+                    )
+                    
+                    # Create ExecuteTrajectory command with 10Hz sample rate
+                    timestep_commands.append((agent_id, ExecuteTrajectory(trajectory_pieces, sample_rate=10)))
                 
-                for t in range(stagger):
-                    timestep_commands = []
-                    for agent_id in range(num_agents):
-                        # Extract position from next state in optimized trajectory
-                        next_position = first_x_trajs[agent_id, t, :3]  # First 3 elements are [x, y, z]
-                        
-                        # Validate waypoint safety before sending command
-                        validate_waypoint_safety(next_position, agent_id, XY_POSITION_RANGE, Z_POSITION_RANGE)
-                        timestep_commands.append((agent_id, Goto(float(next_position[0]), float(next_position[1]), float(next_position[2]), STEP_TIME)))
-                    sequence[2 + t] = timestep_commands.copy()
-                
-                # set commands left before next solve needed
-                commands_left = stagger - 1
+                # Update sequence with new ExecuteTrajectory command
+                sequence[2] = timestep_commands.copy()
 
             elif step_commands and type(step_commands[0][1]) is Land:
                 print('   Landing complete for all drones')
@@ -603,10 +704,12 @@ if __name__ == "__main__":
     land_sequence = [(i, Land(LAND_TIME)) for i in range(num_agents)]
     sequence.append(arm_sequence)
     sequence.append(takeoff_sequence)
-    for _ in range(T_total):
+    # Calculate number of ExecuteTrajectory commands needed (T_total / stagger)
+    num_trajectory_commands = (T_total + STAGGER - 1) // STAGGER  # Ceiling division
+    for _ in range(num_trajectory_commands):
         # set to None initially as placeholders (will be filled by optimization)
-        goto_sequence = [None] * num_agents
-        sequence.append(goto_sequence)
+        trajectory_sequence = [None] * num_agents
+        sequence.append(trajectory_sequence)
     sequence.append(land_sequence)
 
     controlQueues = [Queue() for _ in range(len(uris))]
