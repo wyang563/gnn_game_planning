@@ -37,8 +37,9 @@ main_config = load_config()
 
 # setup drone radio URIs
 uris = []
-for uri_num in config["drone_uris"]:
-    uris.append(f"radio://0/80/2M/E7E7E7E7{uri_num}")
+for i, uri_num in enumerate(config["drone_uris"]):
+    interface_num = i // 3
+    uris.append(f"radio://{interface_num}/80/2M/E7E7E7E7{uri_num}")
 
 # DEFAULT_SPEED = config["default_speed"]
 STEP_TIME = config["step_time"]
@@ -698,7 +699,15 @@ if __name__ == "__main__":
     arm_sequence = [(i, Arm()) for i in range(num_agents)]
     
     # Generate takeoff heights and create takeoff sequence
-    takeoff_heights = [random.uniform(0.25, 1.5) for _ in range(num_agents)]
+    use_custom_takeoff_heights = config.get("use_custom_takeoff_heights", False)
+    if use_custom_takeoff_heights:
+        print("Using custom takeoff heights from config")
+        takeoff_heights = config.get("custom_takeoff_heights", None)
+        if takeoff_heights is None:
+            raise ValueError("custom_takeoff_heights is missing")
+    else:
+        takeoff_heights = [random.uniform(0.25, 1.5) for _ in range(num_agents)]
+
     takeoff_sequence = [(i, Takeoff(takeoff_heights[i], STEP_TIME)) for i in range(num_agents)]
     
     land_sequence = [(i, Land(LAND_TIME)) for i in range(num_agents)]
@@ -714,8 +723,19 @@ if __name__ == "__main__":
 
     controlQueues = [Queue() for _ in range(len(uris))]
 
-    # generate random goals
-    goals = sim_random_init(num_agents, xy_position_range=[-1.5, 1.5], z_position_range=[0.25, 1.5], min_distance=MIN_GOAL_DISTANCE)
+    # Configure goals: use custom goals when enabled and well-formed, otherwise fall back to random goals
+    use_custom_goals = config.get("use_custom_goals", False)
+    custom_goals = config.get("custom_goal_positions", None)
+    if use_custom_goals:
+        if custom_goals is None:
+            raise ValueError("custom_goal_positions is missing")
+        elif len(custom_goals) != num_agents:
+            raise ValueError("Number of custom goals does not match number of agents")
+        else:
+            print("Using custom goal positions from config")
+            goals = jnp.array(custom_goals)
+    else:
+        goals = sim_random_init(num_agents, xy_position_range=[-1.5, 1.5], z_position_range=[0.25, 1.5], min_distance=MIN_GOAL_DISTANCE)
 
     # load GNN model for player selection
     model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity/20251203_144008/psn_best_model.pkl" 

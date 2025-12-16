@@ -1,9 +1,16 @@
-drone_uris: ['03']
+drone_uris: ['02', '07']
+mask_threshold: 0.2
 default_speed: 0.1
 step_time: 1
 land_time: 10.0
-T_total: 25
+T_total: 30
 min_goal_separation_distance: 0.5
-stagger: 5
-xy_position_range: [-1.5, 1.5]
+stagger: 6 
+xy_position_range: [-2.0, 2.0]
 z_position_range: [0.25, 1.5]
+use_custom_goals: true
+use_custom_takeoff_heights: true
+custom_takeoff_heights: [1.0, 1.0]
+custom_goal_positions:
+  - [1.5, 0.0, 0.5]
+  - [-1.5, 0.0, 0.5]
