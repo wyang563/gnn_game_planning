@@ -605,10 +605,18 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
             plot_dir.mkdir(parents=True, exist_ok=True)
             print(f'Saving plots to: {plot_dir}')
             
-            # Convert JAX arrays to numpy for plotting
-            x_trajs_np = jnp.array(x_trajs)
-            goals_np = jnp.array(goals)
-            init_positions_np = init_states[:, :3] if init_states is not None else jnp.zeros((num_agents, 3))
+            # Compute final trajectories from init_states and control_trajs if not already computed
+            if init_states is not None:
+                x_trajs, _, _ = jit_batched_linearize_dyn(init_states, control_trajs)
+            else:
+                # Fallback: create empty trajectories if init_states not available
+                x_trajs = jnp.zeros((num_agents, T_total, opt_params['x_dim']))
+            
+            # Convert JAX arrays to numpy for plotting and saving
+            x_trajs_np = np.array(x_trajs)
+            control_trajs_np = np.array(control_trajs)
+            goals_np = np.array(goals)
+            init_positions_np = init_states[:, :3] if init_states is not None else np.zeros((num_agents, 3))
             
             # 1. Plot basic trajectories (PNG)
             print('  Generating trajectory plot...')
@@ -671,6 +679,44 @@ def control_thread(swarm, stagger=1, goals=None, model=None, model_state=None,
                     )
             else:
                 print('  Warning: No masks collected during simulation, skipping masked plots')
+            
+            # Save trajectory and control data for each agent
+            print('\n=== Saving trajectory and control data ===')
+            try:
+                pos_dim = opt_params['pos_dim']
+                u_dim = opt_params['u_dim']
+                
+                for agent_id in range(num_agents):
+                    # Extract trajectory data: positions (px, py, pz) and velocities (vx, vy, vz)
+                    # x_trajs_np shape: (n_agents, T_total, x_dim) where x_dim = 6
+                    # Positions are first 3 dimensions, velocities are next 3 dimensions
+                    positions = x_trajs_np[agent_id, :, :pos_dim]  # (T_total, 3) - px, py, pz
+                    velocities = x_trajs_np[agent_id, :, pos_dim:]  # (T_total, 3) - vx, vy, vz
+                    
+                    # Extract control data: accelerations (ax, ay, az)
+                    # control_trajs_np shape: (n_agents, T_total, u_dim) where u_dim = 3
+                    controls = control_trajs_np[agent_id, :, :]  # (T_total, 3) - ax, ay, az
+                    
+                    # Combine trajectory data: (T_total, 6) - px, py, pz, vx, vy, vz
+                    trajectory_data = np.concatenate([positions, velocities], axis=1)
+                    
+                    # Save trajectory data as CSV
+                    traj_filename = plot_dir / f'trajectory_agent{agent_id}.csv'
+                    traj_header = 'px,py,pz,vx,vy,vz'
+                    np.savetxt(traj_filename, trajectory_data, delimiter=',', header=traj_header, comments='')
+                    print(f'  Saved trajectory data for agent {agent_id} to: {traj_filename}')
+                    
+                    # Save control data as CSV
+                    control_filename = plot_dir / f'control_agent{agent_id}.csv'
+                    control_header = 'ax,ay,az'
+                    np.savetxt(control_filename, controls, delimiter=',', header=control_header, comments='')
+                    print(f'  Saved control data for agent {agent_id} to: {control_filename}')
+                
+                print(f'\n✓ All trajectory and control data saved to: {plot_dir}')
+                
+            except Exception as save_error:
+                print(f'\n!!! Error saving trajectory/control data: {save_error}')
+                traceback.print_exc()
             
             print(f'\n✓ All plots saved to: {plot_dir}')
             
