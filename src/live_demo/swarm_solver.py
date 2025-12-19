@@ -41,6 +41,23 @@ for i, uri_num in enumerate(config["drone_uris"]):
     interface_num = i // 3
     uris.append(f"radio://{interface_num}/80/2M/E7E7E7E7{uri_num}")
 
+# Global brightness scale for drone ring colors (0 < scale <= 1)
+DRONE_COLOR_BRIGHTNESS_SCALE = 0.3
+
+# Predefined list of 10 distinct RGB colors (full intensity 0–255) for the drones
+DRONE_COLORS = [
+    (255, 0, 0),      # red
+    (0, 255, 0),      # green
+    (0, 0, 255),      # blue
+    (255, 255, 0),    # yellow
+    (255, 0, 255),    # magenta
+    (0, 255, 255),    # cyan
+    (255, 128, 0),    # orange
+    (128, 0, 255),    # purple
+    (0, 128, 255),    # light blue
+    (0, 255, 128),    # spring green
+]
+
 # DEFAULT_SPEED = config["default_speed"]
 STEP_TIME = config["step_time"]
 LAND_TIME = config["land_time"]
@@ -99,14 +116,30 @@ def arm(scf):
 
 def crazyflie_control(scf):
     cf = scf.cf
-    control = controlQueues[uris.index(cf.link_uri)]
+    drone_index = uris.index(cf.link_uri)
+    control = controlQueues[drone_index]
 
     activate_mellinger_controller(scf, False)
 
     commander = scf.cf.high_level_commander
 
-    # Set fade to color effect and reset to Led-ring OFF
-    cf.param.set_value('ring.effect', '14')
+    # Assign a unique, dimmed LED ring color to this drone based on its index.
+    # Uses the standard LED-ring parameters (fadeColor + effect) when available.
+    try:
+        base_r, base_g, base_b = DRONE_COLORS[drone_index % len(DRONE_COLORS)]
+        # Apply global brightness scaling to reduce intensity
+        r = int(base_r * DRONE_COLOR_BRIGHTNESS_SCALE)
+        g = int(base_g * DRONE_COLOR_BRIGHTNESS_SCALE)
+        b = int(base_b * DRONE_COLOR_BRIGHTNESS_SCALE)
+        # Pack RGB into a 24-bit integer 0xRRGGBB
+        color_value = (int(r) << 16) | (int(g) << 8) | int(b)
+        cf.param.set_value('ring.fadeColor', str(color_value))
+        # Effect 14 is typically "fade to color" using fadeColor
+        cf.param.set_value('ring.effect', '14')
+    except KeyError as e:
+        print(f'Warning: could not set LED ring color for drone {drone_index}: {e}')
+    except Exception as e:
+        print(f'Warning: unexpected error while setting LED color for drone {drone_index}: {e}')
 
     while True:
         command = control.get()
@@ -118,6 +151,15 @@ def crazyflie_control(scf):
             commander.takeoff(command.height, command.time)
         elif type(command) is Land:
             commander.land(0.0, command.time)
+            # After landing, turn off the LED ring effect
+            try:
+                # Wait approximately for the landing duration to complete
+                time.sleep(command.time)
+                cf.param.set_value('ring.effect', '0')
+            except KeyError as e:
+                print(f'Warning: could not turn off LED ring for drone {drone_index}: {e}')
+            except Exception as e:
+                print(f'Warning: unexpected error while turning off LED ring for drone {drone_index}: {e}')
         elif type(command) is ExecuteTrajectory:
             # Stream trajectory by evaluating polynomials at high frequency
             dt = 1.0 / command.sample_rate
@@ -831,5 +873,3 @@ if __name__ == "__main__":
         swarm.parallel_safe(crazyflie_control)
 
         time.sleep(1)
-
-
