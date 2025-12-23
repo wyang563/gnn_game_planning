@@ -41,6 +41,7 @@ from load_config import load_config
 from data.ref_traj_data_loading import load_reference_trajectories, prepare_batch_for_training_gnn, extract_true_goals_from_batch, sort_by_n_agents, organize_batches
 from models.loss_funcs import binary_loss, mask_sparsity_loss, batch_similarity_loss, batch_ego_agent_cost
 from models.policies import barrier_function_top_k, jacobian_top_k, nearest_neighbors_top_k 
+from eval.eval_script import eval_model
 
 # ============================================================================
 # GLOBAL PARAMETERS
@@ -588,7 +589,7 @@ def train_step(
         predicted_goals = extract_true_goals_from_batch(batch_data)
         binary_loss_val = binary_loss(prediced_ego_mask)
         sparsity_loss_val = mask_sparsity_loss(prediced_ego_mask)
-        ego_cost_loss_val = batch_ego_agent_cost(prediced_ego_mask, predicted_goals, batch_data, obs_input_type=obs_input_type, apply_masks=False)
+        ego_cost_loss_val = batch_ego_agent_cost(prediced_ego_mask, predicted_goals, batch_data, obs_input_type=obs_input_type)
 
         if sigma3 > 0.0:
             noise = generate_noise(rng_noise, observations, noise_std)
@@ -934,6 +935,41 @@ def train_gnn(
         if hasattr(jax, 'clear_caches'):
             jax.clear_caches()
     
+    # run full evaluation on model
+    print(f"Running full evaluation on best model...")
+    # load the best model
+    best_model_path = os.path.join(run_log_dir, "psn_best_model.pkl")
+    best_model, best_model_state = load_trained_gnn_models(best_model_path, config.gnn.obs_input_type)
+
+    eval_model_args = {
+        "model_path": best_model_path,
+        "model": best_model,
+        "model_state": best_model_state,
+        "agent_type": agent_type,
+        "dataset_path": f"src/data/{agent_type}_agent_data/eval_data_upto_20p",
+        "num_iters": num_iters,
+        "step_size": step_size,
+        "collision_weight": opt_config.collision_weight,
+        "collision_scale": opt_config.collision_scale,
+        "control_weight": opt_config.control_weight,
+        "Q": Q,
+        "R": R,
+        "tsteps": T_total,
+        "planning_horizon": config.game.T_receding_horizon_planning,
+        "mask_horizon": T_observation,
+        "mask_threshold": config.testing.receding_horizon.mask_threshold,
+        "device": device,
+        "u_dim": control_dim,
+        "x_dim": state_dim,
+        "dt": dt,
+        "top_k_mask": edge_metric_top_k,
+        "pos_dim": state_dim // 2,
+        "eval_all_methods": False,
+        "test_mode": False,
+    }
+
+    eval_model(**eval_model_args)
+
     # Close progress bar
     training_pbar.close()
     

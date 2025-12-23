@@ -7,16 +7,14 @@ src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-from load_config import load_config, setup_jax_config, get_device_config
-from models.train_mlp import load_trained_psn_models
-from models.train_gnn import load_trained_gnn_models
-from solver.solve_by_horizon import solve_by_horizon
+import flax.linen as nn
 from solver.point_agent import PointAgent
 from solver.drone_agent import DroneAgent
+from solver.solve import create_batched_loss_functions_mask 
+from models.policies import nearest_neighbors_top_k, jacobian_top_k, barrier_function_top_k, cost_evolution_top_k
 from typing import Any, Dict, List
 import json
 from pathlib import Path
-import numpy as np
 from tqdm import tqdm
 import pandas as pd
 from eval.compute_metrics import compute_metrics
@@ -33,12 +31,143 @@ def load_dataset(dataset_path: str) -> List[Dict]:
             dataset.append(data)
     return dataset
 
+# standard parallelized/optimized version of solver
+def solve_by_horizon(
+    agents: list[PointAgent],
+    initial_states: jnp.ndarray,
+    ref_trajs: jnp.ndarray,
+    num_iters: int,
+    planning_horizon: int,
+    u_dim: int,
+    pos_dim: int,
+    tsteps: int,
+    mask_horizon: int,
+    mask_threshold: float,
+    step_size: float,
+    model: nn.Module,
+    model_state: Any,
+    model_type: str,
+    device: Any,
+    top_k_mask: float = 3,
+    dt: float = 0.1,
+    use_only_ego_masks: bool = True,
+    collision_weight: float = 2.0,
+    collision_scale: float = 1.0,
+    disable_tqdm: bool = False,
+): 
+    n_agents = len(agents)
+
+    # create batched functions
+    jit_batched_linearize_dyn, jit_batched_linearize_loss, jit_batched_solve, jit_batched_loss = create_batched_loss_functions_mask(agents, device)
+
+    # initialize batched arrays
+    control_trajs = jnp.zeros((n_agents, tsteps, u_dim))
+    init_states = jnp.array([initial_states[i] for i in range(n_agents)])
+
+    # logging data
+    simulation_masks = []
+
+    for iter in tqdm(range(tsteps + 1), disable=disable_tqdm):
+        # setup horizon arrays
+        x_trajs, _, _ = jit_batched_linearize_dyn(init_states, control_trajs)
+        horizon_x0s = x_trajs[:, iter]
+        horizon_u_trajs = jnp.zeros((n_agents, planning_horizon, u_dim))
+
+        start_ind = min(iter, tsteps - 1)
+        end_ind = min(start_ind + planning_horizon, tsteps)
+        horizon_ref_trajs = ref_trajs[:, start_ind:end_ind, :]
+        if horizon_ref_trajs.shape[1] < planning_horizon:
+            padding = jnp.tile(horizon_ref_trajs[:, -1:], (1, planning_horizon - horizon_ref_trajs.shape[1], 1))
+            horizon_ref_trajs = jnp.concatenate([horizon_ref_trajs, padding], axis=1)
+
+        # get mask horizon input trajs
+        start_ind = max(0, iter - mask_horizon)
+        end_ind = max(iter, 1)
+
+        # get past x_trajs
+        past_x_trajs = x_trajs[:, start_ind:end_ind, :]
+        if past_x_trajs.shape[1] < mask_horizon:
+            padding = jnp.tile(past_x_trajs[:, -1:, :], (1, mask_horizon - past_x_trajs.shape[1], 1))
+            past_x_trajs = jnp.concatenate([past_x_trajs, padding], axis=1)
+        
+        # get mask based off past x_trajs
+        if model_type == "mlp":
+            past_x_trajs = past_x_trajs.reshape(n_agents, -1)
+        elif model_type == "gnn":
+            past_x_trajs = past_x_trajs.transpose(1, 0, 2)
+        elif model_type == "all":
+            pass
+
+        batch_past_x_trajs = past_x_trajs[None, ...]
+        
+        # calculate ego masks based off model player selection type
+        match model_type:
+            case "mlp" | "gnn":
+                masks = model.apply({'params': model_state['params']}, batch_past_x_trajs, deterministic=True)
+                masks = jnp.squeeze(masks, axis=0) # squeeze batch dimension
+                if model_type == "mlp":
+                    # Transform (n_agents, n_agents-1) mask to (n_agents, n_agents) with 0 at row i, col i since MLP only returns n_agents - 1 sized masks
+                    padded_masks = []
+                    for i in range(n_agents):
+                        mask_row = masks[i]
+                        row_with_zero = jnp.concatenate([mask_row[:i], jnp.array([0]), mask_row[i:]])
+                        padded_masks.append(row_with_zero)
+                    masks = jnp.stack(padded_masks, axis=0)
+            case "nearest_neighbors":
+                masks = nearest_neighbors_top_k(past_x_trajs, top_k_mask)
+            case "jacobian":
+                masks = jacobian_top_k(past_x_trajs, top_k_mask, dt=dt, w1=collision_weight, w2=collision_scale)
+            case "cost_evolution":
+                masks = cost_evolution_top_k(past_x_trajs, top_k=top_k_mask, w1=collision_weight, w2=collision_scale)
+            case "barrier_function":
+                masks = barrier_function_top_k(past_x_trajs, top_k_mask, R=0.5, kappa=5.0)
+            case "all":
+                masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
+                masks = masks.astype(jnp.float32)
+            case _:
+                raise ValueError(f"Invalid model type: {model_type}")
+
+        # threshold ego masks
+        masks = jnp.where(masks > mask_threshold, 1.0, 0.0)
+
+        # assumes ego agent_id is 0
+        simulation_masks.append(masks[0])
+
+        # condition for if we want all other agents to consider every other agent
+        if use_only_ego_masks:
+            ego_masks = masks[0]
+            masks = ~(jnp.eye(n_agents).astype(jnp.bool_))
+            masks = masks.astype(jnp.float32)
+            # Set the first row of the masks matrix to be ego_masks
+            masks = masks.at[0].set(ego_masks)
+
+        # game solving optimization loop 
+        for _ in range(num_iters + 1):
+            horizon_x_trajs, A_trajs, B_trajs = jit_batched_linearize_dyn(horizon_x0s, horizon_u_trajs)
+            all_x_pos = jnp.broadcast_to(horizon_x_trajs[None, :, :, :pos_dim], (n_agents, n_agents, planning_horizon, pos_dim))
+            other_x_trajs = jnp.transpose(all_x_pos, (0, 2, 1, 3))
+            mask_for_step = jnp.tile(masks[:, None, :], (1, planning_horizon, 1))
+            a_trajs, b_trajs = jit_batched_linearize_loss(horizon_x_trajs, horizon_u_trajs, horizon_ref_trajs, other_x_trajs, mask_for_step)
+            v_trajs, _ = jit_batched_solve(A_trajs, B_trajs, a_trajs, b_trajs)
+            horizon_u_trajs += step_size * v_trajs
+
+        # update u_trajs
+        control_trajs = control_trajs.at[:, iter, :].set(horizon_u_trajs[:, 0, :])
+    
+    # calculate final x_trajs
+    final_x_trajs, _, _ = jit_batched_linearize_dyn(init_states, control_trajs)
+    return final_x_trajs, control_trajs, simulation_masks
+
 def eval_model(
     **kwargs: Any
 ) -> None:
 
+    # new model parameters
     model_path = kwargs["model_path"]
-    model_type = kwargs["model_type"]
+    model = kwargs["model"]
+    model_state = kwargs["model_state"]
+    agent_type = kwargs["agent_type"]
+
     dataset_path = kwargs["dataset_path"]
     num_iters = kwargs["num_iters"]
     step_size = kwargs["step_size"]
@@ -70,20 +199,6 @@ def eval_model(
         methods = ["nearest_neighbors", "jacobian", "cost_evolution", "barrier_function"]
     else:
         methods = []
-    
-    # Load model if provided
-    if model_path is not None:
-        if model_type == "mlp":
-            model, model_state = load_trained_psn_models(model_path, model_type)
-            methods.append("model_mlp")
-        elif model_type == "gnn":
-            model, model_state = load_trained_gnn_models(model_path, model_type)
-            methods.append("model_gnn")
-        else:
-            raise ValueError(f"Invalid model type: {model_type}")
-    else:
-        model = None
-        model_state = None
     
     # Store results for all methods
     all_results = {method: [] for method in methods}
@@ -278,109 +393,3 @@ def eval_model(
         with open(summary_txt, 'w') as f:
             f.write(summary_df.to_string(index=False))
         print(f"Saved summary table to {summary_txt}")
-
-if __name__ == "__main__":
-    config = load_config()
-    setup_jax_config()
-    device = get_device_config()
-    print(f"Using device: {device}")
-
-    # TOGGLE FOR EVALUATING ALL METHODS
-    eval_all_methods = False 
-    
-    # Extract parameters from configuration
-    dt = config.game.dt
-    tsteps = config.game.T_total
-    n_agents = config.game.N_agents  
-    init_type = config.game.initiation_type
-    mask_threshold = config.testing.receding_horizon.mask_threshold
-    planning_horizon = config.game.T_receding_horizon_planning
-    mask_horizon = config.game.T_observation
-
-    # Optimization parameters - get agent-specific config
-    agent_type = config.game.agent_type
-    opt_config = getattr(config.optimization, agent_type)
-    num_iters = opt_config.num_iters
-    step_size = opt_config.step_size
-    collision_weight = opt_config.collision_weight
-    collision_scale = opt_config.collision_scale
-    control_weight = opt_config.control_weight
-    Q = jnp.diag(jnp.array(opt_config.Q))
-    R = jnp.diag(jnp.array(opt_config.R))
-
-    # Model configuration - set to None to only evaluate baselines, or provide path for model evaluation
-    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.7_sigma2_0.7_sigma3_1.5_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251205_094622/psn_best_model.pkl"
-    model_type = "gnn"  
-    dataset_path = f"src/data/{agent_type}_agent_data/eval_data_upto_20p"
-    top_k_mask = 1
-
-    TEST_MODE = False 
-
-    # multiple model paths
-    model_paths = [
-        "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity",
-        "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_1.0_sigma2_1.0_sigma3_0.1_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251207_125802/psn_best_model.pkl",
-        "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_1.0_sigma2_1.0_sigma3_0.5_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251206_232715/psn_best_model.pkl",
-        "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.08_sigma2_0.08_sigma3_0.04_noise_std_0.5_epochs_30_loss_type_similarity/20251206_173412/psn_best_model.pkl",
-        "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.05_sigma2_0.05_sigma3_0.02_noise_std_0.5_epochs_30_loss_type_similarity/20251206_232630/psn_best_model.pkl"
-    ]
-
-    # model_paths = [
-    #     "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.7_sigma2_0.7_sigma3_1.5_noise_std_0.1_epochs_30_loss_type_ego_agent_cost/20251127_091515/psn_best_model.pkl",
-    #     "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.7_sigma2_0.7_sigma3_1.5_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251205_094652/psn_best_model.pkl",
-    #     "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.1_epochs_30_loss_type_similarity/20251127_091623/psn_best_model.pkl",
-    #     "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.7_sigma2_0.7_sigma3_1.5_noise_std_0.5_epochs_30_loss_type_ego_agent_cost/20251205_094622/psn_best_model.pkl",
-    #     "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_barrier-function_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.001_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.25_noise_std_0.5_epochs_30_loss_type_similarity/20251203_144120/psn_best_model.pkl"
-    # ]
-
-    for i, model_path in enumerate(model_paths):
-        top_k_mask = i + 1
-
-        print("RUNNING EVALUATIONS")
-        print("=" * 60)
-        print(f"  agent_type: {agent_type}")
-        print(f"  model_path: {model_path}")
-        print(f"  model_type: {model_type}")
-        print(f"  dataset_path: {dataset_path}")
-        print(f"  top_k_mask: {top_k_mask}")
-        print(f"  eval_all_methods: {eval_all_methods}")
-        print(f"  test_mode: {TEST_MODE}")
-        print(f"  num_iters: {num_iters}")
-        print(f"  step_size: {step_size}")
-        print(f"  collision_weight: {collision_weight}")
-        print(f"  collision_scale: {collision_scale}")
-        print(f"  control_weight: {control_weight}")
-        print(f"  Q: {Q}")
-        print(f"  R: {R}")
-        print(f"  dt: {dt}")
-        print(f"  tsteps: {tsteps}")
-        print(f"  planning_horizon: {planning_horizon}")
-        print(f"  top_k_mask: {top_k_mask}")
-
-        args = {
-            "model_path": model_path,
-            "model_type": model_type,
-            "dataset_path": dataset_path,
-            "num_iters": num_iters,
-            "step_size": step_size,
-            "collision_weight": collision_weight,
-            "collision_scale": collision_scale,
-            "control_weight": control_weight,
-            "Q": Q,
-            "R": R,
-            "dt": dt,
-            "tsteps": tsteps,
-            "planning_horizon": planning_horizon,
-            "mask_horizon": mask_horizon,
-            "mask_threshold": mask_threshold,
-            "device": device,
-            "u_dim": opt_config.control_dim,
-            "x_dim": opt_config.state_dim,
-            "dt": dt, 
-            "top_k_mask": top_k_mask,
-            "pos_dim": opt_config.state_dim // 2,
-            "eval_all_methods": eval_all_methods,
-            "test_mode": TEST_MODE,
-        }
-
-        eval_model(**args)

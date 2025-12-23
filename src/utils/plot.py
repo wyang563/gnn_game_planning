@@ -1742,5 +1742,312 @@ def plot_point_agent_mask_timesteps_png(
     print("✓ PNG created successfully!")
 
 
+def plot_drone_agent_mask_timesteps_png(
+    trajectories,
+    goals,
+    init_positions,
+    player_mask,
+    ego_agent_id,
+    save_path,
+    figsize=(36, 16),
+    xlim=None,
+    ylim=None,
+    zlim=None,
+):
+    """
+    Create a PNG plot with 3 subplots showing drone agent trajectories at
+    different time intervals: t/3, 2t/3, and full trajectory.
+
+    Ego agent's trajectory is always blue. Other agents' trajectories are red
+    when included in the ego agent's player mask at that time step, gray otherwise.
+    """
+    # Convert to numpy arrays
+    trajectories = np.array(trajectories)
+    goals = np.array(goals)
+    init_positions = np.array(init_positions)
+    player_mask = np.array(player_mask)
+
+    # Extract position data (first 3 columns if state includes velocity)
+    if trajectories.shape[-1] > 3:
+        positions = trajectories[:, :, :3]
+    else:
+        positions = trajectories
+
+    n_agents, n_timesteps, _ = positions.shape
+
+    # Handle mask shape - convert to (n_timesteps, n_agents) if needed
+    if player_mask.shape == (n_agents, n_timesteps):
+        player_mask = player_mask.T
+
+    # Auto-calculate axis limits if not provided
+    if xlim is None or ylim is None or zlim is None:
+        all_x = np.concatenate(
+            [positions[:, :, 0].ravel(), goals[:, 0], init_positions[:, 0]]
+        )
+        all_y = np.concatenate(
+            [positions[:, :, 1].ravel(), goals[:, 1], init_positions[:, 1]]
+        )
+        all_z = np.concatenate(
+            [positions[:, :, 2].ravel(), goals[:, 2], init_positions[:, 2]]
+        )
+
+        x_min, x_max = all_x.min(), all_x.max()
+        y_min, y_max = all_y.min(), all_y.max()
+        z_min, z_max = all_z.min(), all_z.max()
+
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        z_range = z_max - z_min
+
+        x_padding = max(0.15 * x_range, 0.5)
+        y_padding = max(0.15 * y_range, 0.5)
+        z_padding = max(0.15 * z_range, 0.5)
+
+        if xlim is None:
+            xlim = (x_min - x_padding, x_max + x_padding)
+        if ylim is None:
+            ylim = (y_min - y_padding, y_max + y_padding)
+        if zlim is None:
+            zlim = (z_min - z_padding, z_max + z_padding)
+
+    # Color scheme
+    ego_color = "darkblue"
+    masked_color = "red"
+    unmasked_color = "gray"
+
+    # Create figure with 1x3 grid with 3D subplots
+    fig = plt.figure(figsize=figsize)
+
+    # Layout: margins & spacing
+    pad_inches = 0.5
+    left_margin = pad_inches / figsize[0]
+    right_margin = 1.0 - pad_inches / figsize[0]
+    bottom_margin = pad_inches / figsize[1]
+    top_margin = 1.0 - pad_inches / figsize[1]
+
+    available_width = figsize[0] - 2 * pad_inches
+    subplot_width = available_width / 3
+    wspace = pad_inches / subplot_width
+
+    # Time step indices for t/3, 2t/3, full
+    time_indices = []
+    for i in range(1, 4):
+        t_idx = int(i * n_timesteps / 3)
+        t_idx = min(t_idx, n_timesteps - 1)
+        time_indices.append(t_idx)
+
+    # Create 3D subplots manually with proper positioning
+    axes = []
+    subplot_positions = [131, 132, 133]  # 1x3 grid positions
+    
+    for pos in subplot_positions:
+        ax = fig.add_subplot(pos, projection='3d')
+        axes.append(ax)
+
+    plt.subplots_adjust(
+        left=left_margin,
+        right=right_margin,
+        top=top_margin,
+        bottom=bottom_margin,
+        wspace=wspace,
+    )
+
+    # --- Draw each subplot ---
+    for plot_idx, t_end in enumerate(time_indices):
+        ax = axes[plot_idx]
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_zlim(zlim)
+
+        ax.grid(True, alpha=0.3)
+
+        # Titles
+        if plot_idx == 2:
+            title = "Full Trajectory"
+        else:
+            title = f"t = {t_end + 1}"
+        ax.set_title(title, fontsize=32, fontweight="bold")
+
+        ax.set_xlabel("X Position", fontsize=28)
+        if plot_idx == 0:
+            ax.set_ylabel("Y Position", fontsize=28)
+        ax.set_zlabel("Z Position", fontsize=28)
+
+        # Remove numeric tick labels (keep grid only)
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_zticklabels([])
+
+        current_mask = player_mask[t_end, :]  # (n_agents,)
+
+        # Ego trajectory
+        ego_traj = positions[ego_agent_id, : t_end + 1, :]
+        if len(ego_traj) > 1:
+            ax.plot(
+                ego_traj[:, 0],
+                ego_traj[:, 1],
+                ego_traj[:, 2],
+                "-",
+                color=ego_color,
+                alpha=0.9,
+                linewidth=6.0,
+                label="Ego Agent",
+            )
+
+        # Other agents' trajectories
+        for i in range(n_agents):
+            if i == ego_agent_id:
+                continue
+
+            agent_traj = positions[i, : t_end + 1, :]
+            if len(agent_traj) <= 1:
+                continue
+
+            is_masked = bool(current_mask[i])
+            color = masked_color if is_masked else unmasked_color
+            alpha = 0.8 if is_masked else 0.5
+            linewidth = 5.0 if is_masked else 3.0
+
+            ax.plot(
+                agent_traj[:, 0],
+                agent_traj[:, 1],
+                agent_traj[:, 2],
+                "-",
+                color=color,
+                alpha=alpha,
+                linewidth=linewidth,
+            )
+
+        # Current positions
+        for i in range(n_agents):
+            current_pos = positions[i, t_end, :]
+
+            if i == ego_agent_id:
+                ax.scatter(
+                    current_pos[0],
+                    current_pos[1],
+                    current_pos[2],
+                    color=ego_color,
+                    s=400,
+                    marker="o",
+                    alpha=0.9,
+                    edgecolors="black",
+                    linewidth=3,
+                    zorder=5,
+                )
+            else:
+                is_masked = bool(current_mask[i])
+                color = masked_color if is_masked else unmasked_color
+                ax.scatter(
+                    current_pos[0],
+                    current_pos[1],
+                    current_pos[2],
+                    color=color,
+                    s=350,
+                    marker="o",
+                    alpha=0.8,
+                    edgecolors="black",
+                    linewidth=2.5,
+                    zorder=5,
+                )
+
+            ax.text(
+                current_pos[0],
+                current_pos[1],
+                current_pos[2],
+                f" {i}",
+                fontsize=24,
+                ha="left",
+                va="bottom",
+                zorder=6,
+            )
+
+        # Goals
+        for i in range(n_agents):
+            if i == ego_agent_id:
+                ax.scatter(
+                    goals[i, 0],
+                    goals[i, 1],
+                    goals[i, 2],
+                    color=ego_color,
+                    s=800,
+                    marker="*",
+                    edgecolors="black",
+                    linewidth=3,
+                    alpha=0.8,
+                    zorder=5,
+                )
+            else:
+                is_masked = bool(current_mask[i])
+                goal_color = masked_color if is_masked else unmasked_color
+                ax.scatter(
+                    goals[i, 0],
+                    goals[i, 1],
+                    goals[i, 2],
+                    color=goal_color,
+                    s=600,
+                    marker="*",
+                    edgecolors="black",
+                    linewidth=2.5,
+                    alpha=0.6,
+                    zorder=5,
+                )
+
+    # --- Legend: place just above the middle axes, in axes coords ---
+    legend_elements = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=ego_color,
+            markersize=24,
+            markeredgecolor="black",
+            markeredgewidth=3,
+            label="Ego Agent",
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=masked_color,
+            markersize=20,
+            markeredgecolor="black",
+            markeredgewidth=2.5,
+            label="Included Agent(s)",
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=unmasked_color,
+            markersize=20,
+            markeredgecolor="black",
+            markeredgewidth=2.5,
+            label="Excluded Agent(s)",
+        ),
+    ]
+
+    # Use the center subplot as reference for axes coordinates
+    anchor_ax = axes[1] if len(axes) > 1 else axes[0]
+
+    fig.legend(
+        handles=legend_elements,
+        loc="lower center",               # bottom of legend
+        fontsize=32,
+        framealpha=0.9,
+        ncol=3,
+        bbox_to_anchor=(0.5, 1.08),       # 8% of axes height above its top
+        bbox_transform=anchor_ax.transAxes,
+    )
+
+    print(f"Saving PNG to: {save_path}")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight", pad_inches=0)
+    plt.close(fig)
+    print("✓ PNG created successfully!")
+
+
 def plot_past_and_predicted_drone_agent_trajectories():
     pass

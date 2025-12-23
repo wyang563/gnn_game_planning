@@ -19,14 +19,11 @@ if project_root not in sys.path:
     
 from solver.point_agent import PointAgent
 from load_config import load_config, setup_jax_config, get_device_config, ConfigLoader
-from solver.solve import create_batched_loss_functions_mask, solve_ilqgames_parallel_mask
+from solver.solve import create_batched_loss_functions_mask 
 from flax import linen as nn
 from utils.goal_init import random_init, origin_init_collision
-from models.train_gnn import GNNSelectionNetwork, load_trained_gnn_models
-from models.train_mlp import PlayerSelectionNetwork, load_trained_psn_models
+from models.train_gnn import load_trained_gnn_models
 from tqdm import tqdm
-from utils.plot import plot_point_agent_trajs, plot_point_agent_gif
-# from eval.baselines import nearest_neighbors, jacobian, cost_evolution, barrier_function
 from models.policies import nearest_neighbors_top_k, jacobian_top_k, barrier_function_top_k, cost_evolution_top_k
 from utils.agent_selection_utils import agent_type_to_agent_class, agent_type_to_plot_functions
 from eval.compute_metrics import compute_minimum_distance 
@@ -344,8 +341,8 @@ if __name__ == "__main__":
     u_dim = opt_config.control_dim
 
     # CUSTOM CONFIGS
-    tsteps = 50 
-    n_agents = 10 
+    tsteps = 100 
+    n_agents = 25 
     num_iters = 50 
 
     print("Optimization parameters:")
@@ -396,7 +393,7 @@ if __name__ == "__main__":
     # model, model_state = load_trained_psn_models(model_path, config.psn.obs_input_type)
 
     model_type = "gnn"
-    model_path = "log/point_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.05_sigma2_0.05_sigma3_0.02_noise_std_0.5_epochs_30_loss_type_similarity/20251206_232630/psn_best_model.pkl"
+    model_path = "log/drone_agent_train_runs/gnn_full_MP_2_edge-metric_full_top-k_5/train_n_agents_20_T_50_obs_10_lr_0.0003_bs_32_sigma1_0.11_sigma2_0.11_sigma3_0.03_noise_std_0.5_epochs_30_loss_type_similarity/20251219_121743/psn_best_model.pkl"
     model, model_state = load_trained_gnn_models(model_path, config.gnn.obs_input_type)
     use_only_ego_masks = False 
 
