@@ -46,7 +46,7 @@ from eval.eval_script import eval_model
 # ============================================================================
 # GLOBAL PARAMETERS
 # ============================================================================
-config = load_config(config_path="src/config.yaml")
+config = load_config()
 
 # Game parameters
 N_agents = config.game.N_agents

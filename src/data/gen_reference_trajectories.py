@@ -20,7 +20,7 @@ def generate_reference_trajectories(**kwargs):
     # extract inputs
     n_agents = kwargs["n_agents"]
     agent_type = kwargs["agent_type"]
-    min_tsteps = kwargs["tsteps"]
+    tsteps = kwargs["tsteps"]
     dt = kwargs["dt"]
     num_iters = kwargs["num_iters"]
     step_size = kwargs["step_size"]
@@ -51,7 +51,7 @@ def generate_reference_trajectories(**kwargs):
         # create agent setup
         if gen_type == "fixed":
             agents, initial_states, reference_trajectories, target_positions = create_agent_setup(n_agents, agent_class, init_type, x_dim, u_dim, dt, Q, R, tsteps, boundary_size, device, weights)
-            tsteps = max(min_tsteps, n_agents * 4)
+            # tsteps = max(min_tsteps, n_agents * 4)
             create_loss_functions(agents, "no_mask")
         elif gen_type == "variable":
             # make it twice as more likely to generate n > 5 agents than n < 5 agents
@@ -65,8 +65,9 @@ def generate_reference_trajectories(**kwargs):
                     selection_pool.extend([i] * 3)
             n_agents = random.choice(selection_pool)
 
-            # modify tsteps based on number of agents
-            tsteps = max(min_tsteps, n_agents * 4)
+            # # modify tsteps based on number of agents
+            # tsteps = max(min_tsteps, n_agents * 4)
+
             # recalibrate boundary size based on number of agents
             if pos_dim == 2:
                 boundary_size = n_agents**(0.7)  * 1.75

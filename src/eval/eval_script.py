@@ -200,6 +200,10 @@ def eval_model(
     else:
         methods = []
     
+    # Add the provided model to methods if it exists
+    if model is not None and model_state is not None:
+        methods.append("model_gnn")
+    
     # Store results for all methods
     all_results = {method: [] for method in methods}
     

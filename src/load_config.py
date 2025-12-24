@@ -13,6 +13,7 @@ Usage:
     num_agents = config.game.N_agents
 """
 
+import os
 import yaml
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -69,8 +70,8 @@ def load_config(config_path: Optional[str] = None) -> ConfigLoader:
     Load configuration from YAML file.
     
     Args:
-        config_path: Optional path to config file. If None, looks for config.yaml
-                    in the project root directory.
+        config_path: Optional path to config file. If None, checks CONFIG_FILE_PATH 
+                    environment variable first, then falls back to src/config.yaml.
     
     Returns:
         ConfigLoader: Configuration object with dot notation access.
@@ -80,9 +81,15 @@ def load_config(config_path: Optional[str] = None) -> ConfigLoader:
         yaml.YAMLError: If config file is not valid YAML.
     """
     if config_path is None:
-        # Look for config.yaml in the project root
-        project_root = Path(__file__).parent
-        config_path = project_root / "config.yaml"
+        # First check CONFIG_FILE_PATH environment variable
+        env_config_path = os.environ.get('CONFIG_FILE_PATH')
+        if env_config_path and Path(env_config_path).exists():
+            config_path = Path(env_config_path)
+            print(f"Using config file from environment variable: {config_path}")
+        else:
+            # Fall back to default config.yaml in the project root
+            print("Using default src/config.yaml file")
+            config_path = Path("src/config.yaml")
     else:
         config_path = Path(config_path)
     
