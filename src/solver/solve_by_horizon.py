@@ -26,6 +26,7 @@ from models.train_gnn import load_trained_gnn_models
 from tqdm import tqdm
 from models.policies import nearest_neighbors_top_k, jacobian_top_k, barrier_function_top_k, cost_evolution_top_k
 from utils.agent_selection_utils import agent_type_to_agent_class, agent_type_to_plot_functions
+from live_demo.utils.init_goals import sim_random_init 
 from eval.compute_metrics import compute_minimum_distance 
 
 # this is the sequential version so we can calculate compute performance metrics
@@ -344,6 +345,9 @@ if __name__ == "__main__":
     tsteps = 100 
     n_agents = 25 
     num_iters = 50 
+    tsteps = 25 
+    n_agents = 7 
+    num_iters = 100 
 
     print("Optimization parameters:")
     print(f"  agent_type: {agent_type}")
@@ -363,7 +367,13 @@ if __name__ == "__main__":
         boundary_size = 1.35 * n_agents**0.5
     match init_type:
         case "random":
-            init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
+            # FIX FOR NOW
+            boundary_size = 1.5
+            # init_ps, goals = random_init(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
+            init_ps, goals = sim_random_init(n_agents, xy_position_range=(-boundary_size, boundary_size), z_position_range=[0.25, 1.5], min_distance=0.5, generate_init_positions=True)
+            init_ps = jnp.array(init_ps)
+            goals = jnp.array(goals)
+
         case "origin":
             init_ps, goals = origin_init_collision(n_agents, (-boundary_size, boundary_size), dims=pos_dim)
         case _:
@@ -448,6 +458,6 @@ if __name__ == "__main__":
     plot_functions["plot_mask_gif"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_gif_save_path)
     print(f"Creating Mask PNG")
     plot_functions["plot_mask_png"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_png_save_path)
-    print(f"Creating Mask Timesteps PNG")
-    plot_functions["plot_mask_timesteps_png"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_png_timesteps_save_path)
+    # print(f"Creating Mask Timesteps PNG")
+    # plot_functions["plot_mask_timesteps_png"](final_x_trajs, goals, init_ps, simulation_masks, ego_agent_id=0, save_path=mask_png_timesteps_save_path)
 

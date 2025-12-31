@@ -1,5 +1,4 @@
-# drone_uris: ['01', '02', '03', '05', '07', '08']
-drone_uris: ['01', '03', '05', '07']
+drone_uris: ['01', '03', '05', '07', '08', '09']
 mask_threshold: 0.2
 default_speed: 0.1
 step_time: 1
@@ -9,20 +8,32 @@ min_goal_separation_distance: 0.5
 stagger: 6 
 xy_position_range: [-2.0, 2.0]
 z_position_range: [0.25, 1.5]
-use_custom_goals: true 
-use_custom_takeoff_heights: true 
+pause_at_start_duration: 2.0  # seconds to pause at starting position before executing trajectory
+use_custom_goals: false 
+use_custom_takeoff_heights: false 
 custom_takeoff_heights: [0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
-# square setup
-custom_goal_positions:
-- [1.5, 1.5, 0.5]
-- [1.5, -1.5, 0.5]
-- [-1.5, -1.5, 0.5]
-- [-1.5, 1.5, 0.5]
-# swap sides setup
+
+# Fixed trajectory mode: specify directory containing pre-computed trajectories
+# Expected files: trajectory_agent0.csv, trajectory_agent1.csv, etc.
+# Each CSV should have columns: px,py,pz,vx,vy,vz
+fixed_trajectory_dir: "plots/diffusion_trajs/six_agent_swarm/3D_trajectories.csv"
+
+# 2 player head on set up
 # custom_goal_positions:
-#   - [1.5, 0.0, 0.5]
-#   - [1.5, -1.0, 0.5]
-#   - [1.5, 1.0, 0.5]
-#   - [-1.5, -1.0, 0.5]
-#   - [-1.5, 1.0, 0.5]
-#   - [-1.5, 0.0, 0.5]
+# - [1.5, 1.5, 0.5]
+# - [-1.5, -1.5, 0.5]
+# square setup
+# custom_goal_positions:
+# - [1.5, 1.5, 0.5]
+# - [1.5, -1.5, 0.5]
+# - [-1.5, -1.5, 0.5]
+# - [-1.5, 1.5, 0.5]
+
+# swap sides setup
+custom_goal_positions:
+  - [1.5, 0.0, 0.5]
+  - [1.5, -1.0, 0.5]
+  - [1.5, 1.0, 0.5]
+  - [-1.5, -1.0, 0.5]
+  - [-1.5, 1.0, 0.5]
+  - [-1.5, 0.0, 0.5]
